@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QPushButton,
     QSpinBox, QDoubleSpinBox, QScrollArea, QFrame, QSystemTrayIcon, QMenu, QDialog,
-    QAbstractItemView, QStyle, QSizePolicy, QCheckBox, QTimeEdit,
+    QAbstractItemView, QAbstractSpinBox, QStyle, QSizePolicy, QCheckBox, QTimeEdit,
     QStackedWidget, QLayout, QLineEdit, QGraphicsDropShadowEffect, QComboBox
 )
 from PyQt5.QtCore import (
@@ -16,16 +16,68 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import (
     QColor, QDesktopServices, QPainter, QPen, QFontMetrics, QFont, QDrag )
 
-# ---------------------------------------------------------------------------
-# ГЛОБАЛЬНЫЕ НАСТРОЙКИ
-# ---------------------------------------------------------------------------
-UI_SCALE = 1.0
-def s(val): return int(val * UI_SCALE)
 
+# ---------------------------------------------------------------------------
+# МАСШТАБ ИНТЕРФЕЙСА — все параметры масштаба только в этом блоке
+# ---------------------------------------------------------------------------
+# Эталон: 1920x1080 физических пикселей -> UI_SCALE = 1.0.
+# BASE_PIXEL_RATIO — калибровка «эталонных» чисел в коде: раньше тот же вид
+# давал UI_SCALE = 0.7, теперь его даёт UI_SCALE = 1.0.
+# Если вашим эталоном реально был 0.8 — поставьте 0.8.
+BASE_PIXEL_RATIO  = 0.7
+
+REF_SCREEN_HEIGHT = 1080.0      # эталонная высота, физические px
+REF_SCREEN_WIDTH  = 1920.0      # используется только в режиме "fit"
+
+SCALE_MODE   = "height"         # "height" | "fit" | "manual"
+SCALE_MANUAL = 1.0              # значение для SCALE_MODE = "manual"
+SCALE_MIN    = 0.6              # нижний ограничитель
+SCALE_MAX    = 3.0              # верхний ограничитель
+SCALE_ROUND  = int              # int — усечение как в исходнике; round — округление
+
+UI_SCALE = 1.0                  # рабочее значение, ставится init_ui_scale()
+
+
+def s(val):
+    """Эталонные пиксели -> реальные с учётом масштаба."""
+    return SCALE_ROUND(val * UI_SCALE * BASE_PIXEL_RATIO)
+
+
+def calc_ui_scale(screen=None):
+    """1080p -> 1.0; 1440p -> 1.33; 2160p -> 2.0; 720p -> 0.67."""
+    if SCALE_MODE == "manual":
+        raw = SCALE_MANUAL
+    else:
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is None:
+            raw = 1.0
+        else:
+            dpr = screen.devicePixelRatio() or 1.0
+            geo = screen.geometry()
+            raw = (geo.height() * dpr) / REF_SCREEN_HEIGHT
+            if SCALE_MODE == "fit":
+                raw = min(raw, (geo.width() * dpr) / REF_SCREEN_WIDTH)
+    return max(SCALE_MIN, min(SCALE_MAX, raw))
+
+
+def init_ui_scale(screen=None):
+    """Вызывать строго до создания любых виджетов и стилей."""
+    global UI_SCALE
+    UI_SCALE = calc_ui_scale(screen)
+    return UI_SCALE
+
+
+# --- Шрифты (эталонные px, применяются через s()) ---
 FONT_XL, FONT_L, FONT_TITLE = 32, 24, 20
 FONT_BTN_MAIN, FONT_BTN, FONT_INPUT = 16, 20, 18
 FONT_TABLE, FONT_MENU, FONT_TEXT = 16, 14, 18
 FONT_TEXT_COMPACT = 16
+
+# --- Геометрия (эталонные px) ---
+WIDGET_BLOCK_WIDTH  = 300
+WIDGET_BLOCK_HEIGHT = 550
+DETAIL_DATA_ROWS    = 20        # сколько строк видно в раскрытых данных блока
 
 ALL_COLUMNS = [
     "filename", "date", "time", "DOY", "daytime", "file_records", "used_records",
@@ -98,77 +150,513 @@ WIDGET_BLOCK_WIDTH = 300
 WIDGET_BLOCK_HEIGHT = 550
 
 # ---------------------------------------------------------------------------
+# ПАЛИТРА И ГЕОМЕТРИЯ ОФОРМЛЕНИЯ
+# ---------------------------------------------------------------------------
+class P:
+    bg          = "#eef2f7"
+    bg_deep     = "#e3eaf3"
+    surface     = "#ffffff"
+    inset       = "#e9eff6"
+    border      = "#dce4ee"
+    border_mid  = "#c8d5e4"
+    ink         = "#1e293b"
+    ink_soft    = "#475569"
+    muted       = "#78889f"
+    faint       = "#9aa8bd"
+    accent      = "#3b82f6"
+    accent_deep = "#2563eb"
+    accent_press= "#1d4ed8"
+    accent_tint = "#e8f1fe"
+    accent_edge = "#b9d7fb"
+    ok          = "#22c55e"
+    ok_deep     = "#15803d"
+    ok_press    = "#16a34a"
+    ok_edge     = "#14532d"
+    ok_ink      = "#052e16"
+    ok_tint     = "#e6f7ed"
+    warn        = "#f59e0b"
+    warn_deep   = "#b45309"
+    bad         = "#ef4444"
+    bad_hover   = "#dc2626"
+    bad_deep    = "#b91c1c"
+    bad_tint    = "#fdeaea"
+    bad_edge    = "#f6c9c9"
+    violet      = "#8b5cf6"
+    idle        = "#94a3b8"
+
+R_CARD, R_BTN, R_INPUT, R_CHIP = 14, 10, 8, 9
+CARD_SHADOW = True
+
+# Геометрия полей ввода — общая для QSS и расчёта ширины
+FIELD_PAD_X   = 6      # горизонтальный padding, эталонные px
+FIELD_PAD_Y   = 3      # вертикальный padding, эталонные px
+FIELD_BTN_W   = 16     # ширина кнопок спинбокса, эталонные px
+FIELD_COMBO_W = 18     # ширина зоны стрелки комбобокса, эталонные px
+FIELD_BORDER  = 1      # рамка, реальные px (не масштабируется)
+
+
+def field_width(sample, buttons=False, btn_ref=None, min_ref=64):
+    """Ширина поля = самый длинный текст + padding + рамка + запас.
+    Кнопки по умолчанию отключены через QAbstractSpinBox.NoButtons."""
+    f = QFont()
+    f.setPixelSize(max(1, s(FONT_INPUT)))
+    fm = QFontMetrics(f)
+    adv = fm.horizontalAdvance(sample) if hasattr(fm, "horizontalAdvance") else fm.width(sample)
+    chrome = 2 * s(FIELD_PAD_X) + 2 * FIELD_BORDER + s(10)
+    return max(s(min_ref), adv + chrome)
+
+
+# ---------------------------------------------------------------------------
 # СТИЛИ
 # ---------------------------------------------------------------------------
 class Styles:
-    drag_panel = staticmethod(lambda: "#dragPanel { background: transparent; border-bottom: 1px solid #ddd; }")
-    drag_grip = staticmethod(lambda: f"color: #999; font-size: {s(FONT_L)}px; font-weight: bold; border: none;")
-    expand_btn = staticmethod(lambda: f"QPushButton {{ border: 1px solid #ccc; background: white; border-radius: {s(6)}px; font-size: {s(FONT_TITLE)}px; font-weight: bold; color: #555; }} QPushButton:hover {{ background: #eee; }}")
-    block_detail = staticmethod(lambda: f"#block {{ border: 1px solid #888; border-radius: {s(8)}px; padding: {s(6)}px; background: #f8f8f8; }}")
-    block_compact = staticmethod(lambda: f"#block {{ border: 1px solid #ccc; border-radius: {s(14)}px; background: #f8f8f8; padding: 0px; }}")
-    name_edit = staticmethod(lambda: f"QLineEdit {{ border: 1px solid transparent; background: transparent; font-weight: bold; font-size: {s(FONT_TITLE)}px; padding: {s(2)}px; }} QLineEdit:hover {{ border-bottom: 1px solid #aaa; }} QLineEdit:focus {{ border: 1px solid #3498db; border-radius: {s(4)}px; background: white; }}")
-    delete_btn = staticmethod(lambda: f"font-size: {s(FONT_BTN)}px;")
-    path_label = staticmethod(lambda: f"color: #666; font-size: {s(FONT_TEXT)}px;")
-    label_input = staticmethod(lambda: f"font-size: {s(FONT_INPUT)}px; color: #333;")
-    input_field = staticmethod(lambda: f"font-size: {s(FONT_INPUT)}px; padding: {s(2)}px;")
-    btn_action = staticmethod(lambda: f"font-size: {s(FONT_BTN)}px; padding: {s(6)}px;")
-    status_stopped = staticmethod(lambda: f"color: #666; font-size: {s(FONT_INPUT)}px; margin-left: {s(10)}px;")
-    status_running = staticmethod(lambda: f"color: green; font-size: {s(FONT_INPUT)}px; margin-left: {s(10)}px;")
-    info_text = staticmethod(lambda: f"color: #555; font-size: {s(FONT_TEXT)}px;")
-    alert_text = staticmethod(lambda: f"color: #888; font-size: {s(FONT_TEXT)}px;")
-    indicator = staticmethod(lambda color_style, radius: f"background-color: {color_style}; border-radius: {s(radius)}px;")
-    indicator_strip = staticmethod(lambda color_style, top_radius: f"background-color: {color_style}; border-top-left-radius: {s(top_radius)}px; border-top-right-radius: {s(top_radius)}px; border-bottom-left-radius: 0px; border-bottom-right-radius: 0px;")
-    compact_name = staticmethod(lambda: f"ClickableLabel {{ font-size: {s(FONT_TEXT_COMPACT)}px; font-weight: bold; color: #222; background-color: white; border: 1px solid #ddd; border-radius: {s(8)}px; padding: {s(2)}px; }} ClickableLabel:hover {{ border: 2px solid #3498db; }}")
-    hint = staticmethod(lambda: f"color: gray; padding: {s(30)}px; font-size: {s(FONT_TITLE)}px;")
-    hint_compact = staticmethod(lambda: f"color: gray; font-size: {s(FONT_XL)}px; padding: {s(4)}px;")
-    clear_btn = staticmethod(lambda: f"font-size: {s(FONT_BTN)}px; padding: {s(4)}px {s(8)}px;")
-    table = staticmethod(lambda: f"QTableWidget {{ font-size: {s(FONT_TABLE)}px; }} QHeaderView::section {{ font-size: {s(FONT_TABLE)}px; }}")
-    btn_main = staticmethod(lambda: f"font-size: {s(FONT_BTN_MAIN)}px; padding: {s(6)}px {s(12)}px;")
-    central_widget = staticmethod(lambda: "#centralWidget { background-color: #f8f8f8; border: 1px solid #888; }")
-    transparent_bg = staticmethod(lambda: "background: transparent; border: none;")
-    separator = staticmethod(lambda: "background-color: #e0e0e0; border: none;")
-    compact_cell_name = staticmethod(lambda: f"font-size: {s(16)}px; color: #666; background: transparent; border: none;")
-    compact_cell_value = staticmethod(lambda: f"font-size: {s(20)}px; color: #111; font-weight: bold; background: transparent; border: none;")
-    param_indicator = staticmethod(lambda color: f"background-color: {color}; border-radius: {s(4)}px;")
-    compact_cell_bg = staticmethod(lambda: f"QFrame#compactCell {{ background-color: white; border: 1px solid #ddd; border-radius: {s(8)}px; }} QFrame#compactCell:hover {{ border: 2px solid #3498db; }}")
-    
+    # ---------- полотно и скроллбары ----------
+    @staticmethod
+    def app_shell():
+        return f"""
+            #blocksRoot, #blocksPage, #mapViewport, #mainScroll {{
+                background: transparent; border: none;
+            }}
+            QScrollBar:vertical {{
+                background: {P.bg_deep}; width: {s(10)}px;
+                border-radius: {s(5)}px; margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {P.border_mid}; border-radius: {s(5)}px; min-height: {s(30)}px;
+            }}
+            QScrollBar::handle:vertical:hover {{ background: {P.accent}; }}
+            QScrollBar:horizontal {{
+                background: {P.bg_deep}; height: {s(10)}px;
+                border-radius: {s(5)}px; margin: 0px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: {P.border_mid}; border-radius: {s(5)}px; min-width: {s(30)}px;
+            }}
+            QScrollBar::handle:horizontal:hover {{ background: {P.accent}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; }}
+            QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
+        """
+
+    @staticmethod
+    def shell_normal():
+        return f"#centralWidget {{ background-color: {P.bg}; border: none; }}"
+
+    @staticmethod
+    def central_widget():
+        return f"#centralWidget {{ background-color: {P.bg}; border: 1px solid {P.border_mid}; }}"
+
+    @staticmethod
+    def transparent_bg():
+        return "background: transparent; border: none;"
+
+    # ---------- карточка блока ----------
+    @staticmethod
+    def block_detail():
+        return f"""
+            QFrame#block {{
+                background-color: {P.surface};
+                border: 1px solid {P.border};
+                border-radius: {s(R_CARD)}px;
+            }}
+        """
+
+    @staticmethod
+    def block_compact():
+        return f"""
+            QFrame#block {{
+                background-color: {P.surface};
+                border: 1px solid {P.border};
+                border-radius: {s(R_CARD)}px;
+            }}
+        """
+
+    @staticmethod
+    def settings_card():
+        return f"""
+            QFrame#settingsCard {{
+                background-color: {P.inset};
+                border: 1px solid {P.border};
+                border-radius: {s(R_BTN + 2)}px;
+            }}
+        """
+
+    @staticmethod
+    def info_card():
+        return f"""
+            QFrame#infoCard {{
+                background-color: {P.inset};
+                border: 1px solid {P.border};
+                border-radius: {s(R_BTN + 2)}px;
+            }}
+        """
+
+    @staticmethod
+    def separator():
+        return f"background-color: {P.border}; border: none;"
+
+    @staticmethod
+    def section_caption():
+        return f"""
+            QLabel {{
+                color: {P.muted}; font-size: {s(FONT_INPUT)}px; font-weight: bold;
+                background: transparent; border: none;
+                padding: {s(4)}px 0px 0px 0px;
+            }}
+        """
+
+    @staticmethod
+    def section_rule():
+        return f"background-color: {P.border_mid}; border: none;"
+
+    # ---------- текст ----------
+    @staticmethod
+    def name_edit():
+        return f"""
+            QLineEdit {{
+                border: 1px solid transparent; background: transparent;
+                color: {P.ink}; font-weight: bold; font-size: {s(FONT_TITLE)}px;
+                padding: {s(2)}px {s(4)}px; border-radius: {s(6)}px;
+                selection-background-color: {P.accent}; selection-color: #ffffff;
+            }}
+            QLineEdit:hover {{ background: {P.inset}; }}
+            QLineEdit:focus {{ background: {P.surface}; border: 1px solid {P.accent_edge}; }}
+        """
+
+    @staticmethod
+    def path_label():
+        return f"color: {P.muted}; font-size: {s(FONT_TEXT)}px; background: transparent; border: none;"
+
+    @staticmethod
+    def label_input():
+        return f"""
+            QLabel {{ color: {P.ink_soft}; font-size: {s(FONT_INPUT)}px; background: transparent; border: none; }}
+            QLabel:disabled {{ color: {P.faint}; }}
+        """
+
+    @staticmethod
+    def info_text():
+        return f"color: {P.ink_soft}; font-size: {s(FONT_TEXT)}px; background: transparent; border: none;"
+
+    @staticmethod
+    def alert_text():
+        return f"color: {P.muted}; font-size: {s(FONT_TEXT)}px; background: transparent; border: none;"
+
+    @staticmethod
+    def compact_meta():
+        return f"color: {P.muted}; font-size: {s(12)}px; background: transparent; border: none;"
+
+    # ---------- поля ввода ----------
+    @staticmethod
+    def input_field():
+        return f"""
+            QSpinBox, QDoubleSpinBox, QTimeEdit, QComboBox {{
+                background: {P.surface}; color: {P.ink};
+                border: {FIELD_BORDER}px solid {P.border_mid}; border-radius: {s(R_INPUT)}px;
+                padding: {s(FIELD_PAD_Y)}px {s(FIELD_PAD_X)}px; font-size: {s(FONT_INPUT)}px;
+                selection-background-color: {P.accent}; selection-color: #ffffff;
+            }}
+            QSpinBox:hover, QDoubleSpinBox:hover, QTimeEdit:hover, QComboBox:hover {{
+                border-color: {P.accent_edge};
+            }}
+            QSpinBox:focus, QDoubleSpinBox:focus, QTimeEdit:focus, QComboBox:focus {{
+                border: {FIELD_BORDER}px solid {P.accent};
+            }}
+            QSpinBox:disabled, QDoubleSpinBox:disabled, QTimeEdit:disabled, QComboBox:disabled {{
+                background: {P.inset}; color: {P.faint}; border-color: {P.border};
+            }}
+
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding; subcontrol-position: center right;
+                width: {s(FIELD_COMBO_W)}px; background: {P.inset};
+                border-left: {FIELD_BORDER}px solid {P.border};
+                border-top-right-radius: {s(R_INPUT - 2)}px;
+                border-bottom-right-radius: {s(R_INPUT - 2)}px;
+            }}
+            QComboBox QAbstractItemView {{
+                background: {P.surface}; color: {P.ink};
+                border: {FIELD_BORDER}px solid {P.border}; outline: none;
+                selection-background-color: {P.accent_tint}; selection-color: {P.accent_deep};
+            }}
+        """
+    @staticmethod
+    def checkbox():
+        return f"""
+            QCheckBox {{
+                color: {P.ink_soft}; font-size: {s(FONT_INPUT)}px;
+                spacing: {s(6)}px; background: transparent;
+            }}
+            QCheckBox::indicator {{
+                width: {s(15)}px; height: {s(15)}px;
+                border-radius: {s(4)}px;
+                border: 1px solid {P.border_mid}; background: {P.surface};
+            }}
+            QCheckBox::indicator:hover {{ border-color: {P.accent}; }}
+            QCheckBox::indicator:checked {{ background: {P.accent}; border-color: {P.accent_deep}; }}
+            QCheckBox:disabled {{ color: {P.faint}; }}
+            QCheckBox::indicator:disabled {{ background: {P.inset}; border-color: {P.border}; }}
+        """
+
+    # ---------- кнопки ----------
+    @staticmethod
+    def btn_primary():
+        return f"""
+            QPushButton {{
+                background: {P.ok_deep}; color: #ffffff; font-weight: bold;
+                border: 1px solid {P.ok_edge}; border-radius: {s(R_BTN)}px;
+                padding: {s(8)}px {s(14)}px; font-size: {s(FONT_BTN)}px;
+            }}
+            QPushButton:hover {{
+                background: {P.ok}; color: {P.ok_ink}; border-color: {P.ok_deep};
+            }}
+            QPushButton:pressed {{
+                background: {P.ok_press}; color: {P.ok_ink}; border-color: {P.ok_edge};
+            }}
+            QPushButton:disabled {{ background: {P.inset}; color: {P.faint}; border-color: {P.border}; }}
+        """
+
+    @staticmethod
+    def btn_stop():
+        return f"""
+            QPushButton {{
+                background: {P.surface}; color: {P.ink}; font-weight: bold;
+                border: 1px solid {P.border_mid}; border-radius: {s(R_BTN)}px;
+                padding: {s(8)}px {s(14)}px; font-size: {s(FONT_BTN)}px;
+            }}
+            QPushButton:hover {{
+                background: {P.bad_hover}; color: #ffffff; border-color: {P.bad_deep};
+            }}
+            QPushButton:pressed {{
+                background: {P.bad_deep}; color: #ffffff; border-color: {P.bad_deep};
+            }}
+            QPushButton:disabled {{ background: {P.inset}; color: {P.faint}; border-color: {P.border}; }}
+        """
+
+    @staticmethod
+    def btn_action():
+        return f"""
+            QPushButton {{
+                background: {P.surface}; color: {P.ink};
+                border: 1px solid {P.border_mid}; border-radius: {s(R_BTN)}px;
+                padding: {s(8)}px {s(14)}px; font-size: {s(FONT_BTN)}px;
+            }}
+            QPushButton:hover {{ background: {P.accent_tint}; border-color: {P.accent_edge}; color: {P.accent_deep}; }}
+            QPushButton:pressed {{ background: #dbeafe; }}
+            QPushButton:disabled {{ background: {P.inset}; color: {P.faint}; border-color: {P.border}; }}
+        """
+
+    @staticmethod
+    def btn_main():
+        return f"""
+            QPushButton {{
+                background: {P.surface}; color: {P.ink}; font-weight: bold;
+                border: 1px solid {P.border}; border-radius: {s(R_BTN)}px;
+                padding: {s(7)}px {s(14)}px; font-size: {s(FONT_BTN_MAIN)}px;
+            }}
+            QPushButton:hover {{ background: {P.accent_tint}; border-color: {P.accent_edge}; color: {P.accent_deep}; }}
+            QPushButton:pressed {{ background: #dbeafe; }}
+        """
+
+    @staticmethod
+    def icon_btn():
+        return f"""
+            QPushButton {{
+                background: {P.surface}; border: 1px solid {P.border};
+                border-radius: {s(R_BTN)}px; padding: 0px;
+            }}
+            QPushButton:hover {{ background: {P.accent_tint}; border-color: {P.accent_edge}; }}
+            QPushButton:pressed {{ background: #dbeafe; }}
+        """
+
+    @staticmethod
+    def ghost_btn():
+        return f"""
+            QPushButton {{
+                background: transparent; border: 1px solid transparent;
+                border-radius: {s(8)}px; color: {P.muted};
+                font-size: {s(FONT_TEXT_COMPACT)}px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background: {P.accent_tint}; border-color: {P.accent_edge}; color: {P.accent_deep}; }}
+        """
+
+    @staticmethod
+    def delete_btn():
+        return f"""
+            QPushButton {{
+                background: transparent; border: 1px solid transparent;
+                border-radius: {s(13)}px; color: {P.faint}; font-size: {s(FONT_BTN)}px;
+            }}
+            QPushButton:hover {{ background: {P.bad_tint}; border-color: {P.bad_edge}; color: {P.bad_deep}; }}
+            QPushButton:pressed {{ background: #fbdcdc; }}
+        """
+
+    @staticmethod
+    def clear_btn():
+        return f"""
+            QPushButton {{
+                background: {P.surface}; color: {P.bad_deep};
+                border: 1px solid {P.bad_edge}; border-radius: {s(R_BTN)}px;
+                padding: {s(6)}px {s(12)}px; font-size: {s(FONT_BTN)}px;
+            }}
+            QPushButton:hover {{ background: {P.bad_tint}; }}
+        """
+
+    # ---------- индикаторы ----------
+    @staticmethod
+    def indicator(color_style, radius):
+        return f"background-color: {color_style}; border-radius: {s(radius)}px; border: none;"
+
+    @staticmethod
+    def indicator_strip(color_style, top_radius):
+        return f"""
+            background-color: {color_style}; border: none;
+            border-top-left-radius: {s(top_radius)}px; border-top-right-radius: {s(top_radius)}px;
+            border-bottom-left-radius: 0px; border-bottom-right-radius: 0px;
+        """
+
+    @staticmethod
+    def param_indicator(color):
+        return f"background-color: {color}; border-radius: {s(3)}px; border: none;"
+
+    # ---------- данные ----------
+    @staticmethod
+    def data_scroll():
+        return f"""
+            QScrollArea#dataScroll {{
+                background: {P.surface}; border: 1px solid {P.border};
+                border-radius: {s(R_BTN)}px;
+            }}
+        """
+
+    @staticmethod
+    def data_label():
+        return f"""
+            QLabel#dataLabel {{
+                font-size: {s(FONT_TEXT)}px; color: {P.ink};
+                padding: {s(8)}px; background: transparent; border: none;
+            }}
+        """
+
+    # ---------- компактный режим ----------
+    @staticmethod
+    def compact_name():
+        return f"""
+            ClickableLabel {{
+                font-size: {s(FONT_TEXT_COMPACT)}px; font-weight: bold; color: {P.ink};
+                background-color: {P.surface}; border: 1px solid {P.border};
+                border-radius: {s(R_BTN)}px; padding: {s(2)}px {s(6)}px;
+            }}
+            ClickableLabel:hover {{
+                border: 1px solid {P.accent}; background: {P.accent_tint}; color: {P.accent_deep};
+            }}
+        """
+
+    @staticmethod
+    def compact_cell_bg():
+        return f"""
+            QFrame#compactCell {{
+                background-color: {P.surface}; border: 1px solid {P.border};
+                border-radius: {s(R_BTN)}px;
+            }}
+            QFrame#compactCell:hover {{
+                border: 1px solid {P.accent}; background-color: {P.accent_tint};
+            }}
+        """
+
+    @staticmethod
+    def compact_cell_name():
+        return f"font-size: {s(14)}px; color: {P.muted}; background: transparent; border: none;"
+
+    @staticmethod
+    def compact_cell_value():
+        return f"font-size: {s(20)}px; color: {P.ink}; font-weight: bold; background: transparent; border: none;"
+
+    # ---------- подсказки, панель перетаскивания ----------
+    @staticmethod
+    def hint():
+        return f"color: {P.faint}; padding: {s(30)}px; font-size: {s(FONT_TITLE)}px; background: transparent; border: none;"
+
+    @staticmethod
+    def hint_compact():
+        return f"color: {P.faint}; font-size: {s(FONT_XL)}px; padding: {s(4)}px; background: transparent; border: none;"
+
+    @staticmethod
+    def drag_panel():
+        return f"#dragPanel {{ background: {P.surface}; border-bottom: 1px solid {P.border}; }}"
+
+    @staticmethod
+    def drag_grip():
+        return f"color: {P.faint}; font-size: {s(FONT_L)}px; font-weight: bold; border: none; background: transparent;"
+
+    @staticmethod
+    def expand_btn():
+        return f"""
+            QPushButton {{
+                border: 1px solid {P.border}; background: {P.surface};
+                border-radius: {s(8)}px; font-size: {s(FONT_TITLE)}px;
+                font-weight: bold; color: {P.ink_soft};
+            }}
+            QPushButton:hover {{ background: {P.accent_tint}; border-color: {P.accent_edge}; color: {P.accent_deep}; }}
+        """
+
+    # ---------- меню, таблица, диалоги ----------
     @staticmethod
     def menu():
         return f"""
             QMenu {{
-                background-color: #ffffff;
-                color: #000000;
-                border: 1px solid #cccccc;
-                padding: {s(4)}px;
-                font-size: {s(FONT_MENU)}px;
+                background-color: {P.surface}; color: {P.ink};
+                border: 1px solid {P.border}; border-radius: {s(R_BTN)}px;
+                padding: {s(5)}px; font-size: {s(FONT_MENU)}px;
             }}
             QMenu::item {{
                 background-color: transparent;
-                padding: {s(6)}px {s(24)}px {s(6)}px {s(12)}px;
-                border-radius: {s(4)}px;
+                padding: {s(7)}px {s(26)}px {s(7)}px {s(12)}px;
+                border-radius: {s(7)}px;
             }}
-            QMenu::item:selected {{
-                background-color: #3498db;
-                color: #ffffff;
+            QMenu::item:selected {{ background-color: {P.accent_tint}; color: {P.accent_deep}; }}
+            QMenu::separator {{ height: 1px; background-color: {P.border}; margin: {s(4)}px {s(8)}px; }}
+        """
+
+    @staticmethod
+    def table():
+        return f"""
+            QTableWidget {{
+                background: {P.surface}; alternate-background-color: #f6f9fc; color: {P.ink};
+                gridline-color: {P.border}; border: 1px solid {P.border};
+                border-radius: {s(R_BTN)}px; font-size: {s(FONT_TABLE)}px;
+                selection-background-color: {P.accent_tint}; selection-color: {P.ink};
             }}
-            QMenu::separator {{
-                height: 1px;
-                background-color: #dddddd;
-                margin: {s(4)}px {s(8)}px;
+            QHeaderView::section {{
+                background: {P.inset}; color: {P.ink_soft}; border: none;
+                border-bottom: 1px solid {P.border}; padding: {s(6)}px;
+                font-size: {s(FONT_TABLE)}px; font-weight: bold;
             }}
+            QTableCornerButton::section {{ background: {P.inset}; border: none; }}
         """
 
     @staticmethod
     def dialog_style():
         return f"""
-            QDialog {{ background-color: #f8f8f8; }}
-            QLabel {{ color: #222222; }}
-            QCheckBox {{ color: #222222; font-size: {s(FONT_INPUT)}px; background: transparent; }}
-            QLineEdit {{ color: #000000; background-color: #ffffff; border: 1px solid #cccccc; border-radius: {s(4)}px; padding: {s(4)}px; font-size: {s(FONT_INPUT)}px; }}
-            QScrollArea {{ background-color: #ffffff; border: 1px solid #cccccc; border-radius: {s(4)}px; }}
-            QScrollArea > QWidget > QWidget {{ background-color: #ffffff; }}
-            QTableWidget {{ background-color: #ffffff; color: #000000; }}
-        """
+            QDialog {{ background-color: {P.bg}; }}
+            QLabel {{ color: {P.ink}; background: transparent; }}
+            QCheckBox {{ color: {P.ink_soft}; font-size: {s(FONT_INPUT)}px; spacing: {s(6)}px; background: transparent; }}
+            QCheckBox::indicator {{
+                width: {s(15)}px; height: {s(15)}px; border-radius: {s(4)}px;
+                border: 1px solid {P.border_mid}; background: {P.surface};
+            }}
+            QCheckBox::indicator:checked {{ background: {P.accent}; border-color: {P.accent_deep}; }}
+            QLineEdit {{
+                color: {P.ink}; background-color: {P.surface};
+                border: 1px solid {P.border_mid}; border-radius: {s(R_INPUT)}px;
+                padding: {s(6)}px; font-size: {s(FONT_INPUT)}px;
+                selection-background-color: {P.accent}; selection-color: #ffffff;
+            }}
+            QLineEdit:focus {{ border: 1px solid {P.accent}; }}
+            QScrollArea {{ background-color: {P.surface}; border: 1px solid {P.border}; border-radius: {s(R_BTN)}px; }}
+            QScrollArea > QWidget > QWidget {{ background-color: {P.surface}; }}
+        """ + Styles.app_shell()
+
 
 # ---------------------------------------------------------------------------
 # КАСТОМНЫЕ ТУЛТИПЫ
@@ -177,7 +665,9 @@ class CustomToolTipManager(QObject):
     def __init__(self):
         super().__init__()
         self.label = None
-        self.style_sheet = f"""
+
+    def _tooltip_qss(self):
+        return f"""
             QLabel {{
                 background-color: #ffffff;
                 color: #000000;
@@ -193,7 +683,7 @@ class CustomToolTipManager(QObject):
             self.label = QLabel()
             self.label.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
             self.label.setAttribute(Qt.WA_TransparentForMouseEvents)
-            self.label.setStyleSheet(self.style_sheet)
+            self.label.setStyleSheet(self._tooltip_qss())
             self.label.hide()
 
     def show_text(self, text, target_pos):
@@ -430,7 +920,7 @@ class ResizeGrip(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(QPen(QColor(150, 150, 150), 2.0))
+        painter.setPen(QPen(QColor(150, 150, 150), max(1.0, s(2))))
         for i in range(3):
             offset = s(i * 6 + 4)
             painter.drawLine(s(20) - offset, s(18), s(18), s(20) - offset)
@@ -558,8 +1048,16 @@ class BlockWidget(QFrame):
         self._drag_start_pos=None
 
         self._build_ui()
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        if CARD_SHADOW:
+            self._card_shadow = QGraphicsDropShadowEffect(self)
+            self._card_shadow.setBlurRadius(s(18))
+            self._card_shadow.setColor(QColor(15, 23, 42, 26))
+            self._card_shadow.setOffset(0, s(2))
+            self.setGraphicsEffect(self._card_shadow)
         self._set_circle("gray")
         self._update_data_label()
+        self._update_check_times()
         self.setAcceptDrops(False)
         for child in self.findChildren(QWidget): child.setAcceptDrops(False)
 
@@ -609,59 +1107,64 @@ class BlockWidget(QFrame):
             self.window().blocks_container.dragged_block = None
 
     def _build_detail_ui(self, parent):
-        outer = QHBoxLayout(parent)
-        outer.setContentsMargins(s(8), s(8), s(8), s(4))
+        outer = QVBoxLayout(parent)
+        outer.setContentsMargins(s(14), s(12), s(14), s(12))
         outer.setSpacing(s(10))
 
+        head = QHBoxLayout()
+        head.setSpacing(s(8))
         self.circle = QLabel()
-        self.circle.setFixedSize(s(16), s(16))
+        self.circle.setFixedSize(s(14), s(14))
         set_custom_tooltip(self.circle, "Серый — остановлен\nЗелёный — файлы в норме\nКрасный — нет новых файлов")
         self.circle_glow = QGraphicsDropShadowEffect(self)
-        self.circle_glow.setBlurRadius(s(20))
+        self.circle_glow.setBlurRadius(s(16))
         self.circle_glow.setOffset(0, 0)
         self.circle.setGraphicsEffect(self.circle_glow)
-        outer.addWidget(self.circle, 0, Qt.AlignTop)
-
-        content = QWidget()
-        content.setMinimumWidth(s(400))
-        outer.addWidget(content, 1)
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(s(6))
-
-        name_row = QHBoxLayout()
+        head.addWidget(self.circle, 0, Qt.AlignVCenter)
         self.name_edit = QLineEdit(self.custom_name)
         self.name_edit.setStyleSheet(Styles.name_edit())
         self.name_edit.textChanged.connect(self._on_name_changed)
-        name_row.addWidget(self.name_edit, 1)
+        head.addWidget(self.name_edit, 1)
         self.delete_btn = QPushButton("✕")
         self.delete_btn.setFixedSize(s(26), s(26))
+        self.delete_btn.setCursor(Qt.PointingHandCursor)
         self.delete_btn.setStyleSheet(Styles.delete_btn())
         self.delete_btn.clicked.connect(lambda: self.delete_requested.emit(self))
-        name_row.addWidget(self.delete_btn, 0)
-        layout.addLayout(name_row)
+        head.addWidget(self.delete_btn, 0, Qt.AlignVCenter)
+        outer.addLayout(head)
 
         path_row = QHBoxLayout()
+        path_row.setSpacing(s(8))
         self.path_label = QLabel(self.folder_path)
         self.path_label.setStyleSheet(Styles.path_label())
         self.path_label.setWordWrap(True)
+        self.path_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         path_row.addWidget(self.path_label, 1)
         self.open_btn = QPushButton()
         self.open_btn.setIcon(self.style().standardIcon(QStyle.SP_DirOpenIcon))
+        self.open_btn.setIconSize(QSize(s(15), s(15)))
         self.open_btn.setFixedSize(s(30), s(30))
+        self.open_btn.setCursor(Qt.PointingHandCursor)
+        self.open_btn.setStyleSheet(Styles.icon_btn())
+        set_custom_tooltip(self.open_btn, "Открыть папку")
         self.open_btn.clicked.connect(self._open_folder)
-        path_row.addWidget(self.open_btn, 0)
-        layout.addLayout(path_row)
+        path_row.addWidget(self.open_btn, 0, Qt.AlignTop)
+        outer.addLayout(path_row)
 
         line = QFrame()
-        line.setFixedHeight(s(1))
+        line.setFixedHeight(max(1, s(1)))
         line.setStyleSheet(Styles.separator())
-        layout.addWidget(line)
+        outer.addWidget(line)
 
-        settings_layout = QVBoxLayout()
-        settings_layout.setSpacing(s(4))
+        card = QFrame()
+        card.setObjectName("settingsCard")
+        card.setStyleSheet(Styles.settings_card())
+        settings_layout = QVBoxLayout(card)
+        settings_layout.setContentsMargins(s(10), s(9), s(10), s(9))
+        settings_layout.setSpacing(s(7))
 
         row_period = QHBoxLayout()
+        row_period.setSpacing(s(6))
         lbl_p = QLabel("Период, мин:")
         lbl_p.setStyleSheet(Styles.label_input())
         row_period.addWidget(lbl_p)
@@ -669,33 +1172,70 @@ class BlockWidget(QFrame):
         self.period_spin.setStyleSheet(Styles.input_field())
         self.period_spin.setRange(1, 24 * 60)
         self.period_spin.setValue(5)
-        self.period_spin.setFixedWidth(s(70))
+        self.period_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.period_spin.setFixedWidth(field_width("8888", buttons=False))
+        set_custom_tooltip(self.period_spin, "Интервал проверки папки")
         self.period_spin.valueChanged.connect(self._update_alert_info)
         row_period.addWidget(self.period_spin)
-        row_period.addSpacing(10)
-        
-        lbl_mult = QLabel("Множ:")
-        lbl_mult.setStyleSheet(Styles.label_input())
-        row_period.addWidget(lbl_mult)
+        row_period.addStretch()
+        settings_layout.addLayout(row_period)
+
+        lbl_alert_caption = QLabel("Параметры тревоги")
+        lbl_alert_caption.setStyleSheet(Styles.section_caption())
+        settings_layout.addWidget(lbl_alert_caption)
+
+        alert_rule = QFrame()
+        alert_rule.setFixedHeight(max(1, s(1)))
+        alert_rule.setStyleSheet(Styles.section_rule())
+        settings_layout.addWidget(alert_rule)
+
+        row_alert = QHBoxLayout()
+        row_alert.setSpacing(s(6))
+        self.use_period_alert_cb = QCheckBox()
+        self.use_period_alert_cb.setStyleSheet(Styles.checkbox())
+        self.use_period_alert_cb.setCursor(Qt.PointingHandCursor)
+        self.use_period_alert_cb.setFixedWidth(s(20))
+        set_custom_tooltip(self.use_period_alert_cb, "Включить множитель периода\nТревога = период × множитель")
+        self.use_period_alert_cb.toggled.connect(self._on_multiplier_toggled)
+        row_alert.addWidget(self.use_period_alert_cb, 0, Qt.AlignVCenter)
+        self.lbl_mult = ClickableLabel("Множ:")
+        self.lbl_mult.setStyleSheet(Styles.label_input())
+        self.lbl_mult.setCursor(Qt.PointingHandCursor)
+        self.lbl_mult.setEnabled(False)
+        self.lbl_mult.clicked.connect(self.use_period_alert_cb.toggle)
+        row_alert.addWidget(self.lbl_mult)
         self.multiplier_spin = QDoubleSpinBox()
         self.multiplier_spin.setStyleSheet(Styles.input_field())
         self.multiplier_spin.setRange(1.1, 10.0)
         self.multiplier_spin.setSingleStep(0.1)
         self.multiplier_spin.setValue(1.5)
-        self.multiplier_spin.setFixedWidth(s(70))
+        self.multiplier_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.multiplier_spin.setFixedWidth(field_width("88,88", buttons=False))
+        self.multiplier_spin.setEnabled(False)
+        set_custom_tooltip(self.multiplier_spin, "Множитель периода тревоги")
         self.multiplier_spin.valueChanged.connect(self._update_alert_info)
-        row_period.addWidget(self.multiplier_spin)
-        
-        self.use_period_alert_cb = QCheckBox("По периоду")
-        self.use_period_alert_cb.setStyleSheet(Styles.label_input())
-        self.use_period_alert_cb.toggled.connect(self._update_alert_info)
-        row_period.addWidget(self.use_period_alert_cb)
-        row_period.addStretch()
-        settings_layout.addLayout(row_period)
+        row_alert.addWidget(self.multiplier_spin)
+        row_alert.addSpacing(s(14))
+        lbl_cap = QLabel("Старт (> мин):")
+        lbl_cap.setStyleSheet(Styles.label_input())
+        row_alert.addWidget(lbl_cap)
+        self.start_timeout_spin = QSpinBox()
+        self.start_timeout_spin.setStyleSheet(Styles.input_field())
+        self.start_timeout_spin.setRange(1, 24 * 60)
+        self.start_timeout_spin.setValue(30)
+        self.start_timeout_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.start_timeout_spin.setFixedWidth(field_width("8888", buttons=False))
+        set_custom_tooltip(self.start_timeout_spin, "Тревога, если новых файлов нет дольше этого времени")
+        self.start_timeout_spin.valueChanged.connect(self._update_alert_info)
+        row_alert.addWidget(self.start_timeout_spin)
+        row_alert.addStretch()
+        settings_layout.addLayout(row_alert)
 
         row_time = QHBoxLayout()
+        row_time.setSpacing(s(6))
         self.use_exact_start_cb = QCheckBox("Точное время:")
-        self.use_exact_start_cb.setStyleSheet(Styles.label_input())
+        self.use_exact_start_cb.setStyleSheet(Styles.checkbox())
+        self.use_exact_start_cb.setCursor(Qt.PointingHandCursor)
         self.use_exact_start_cb.toggled.connect(self._on_exact_start_toggled)
         row_time.addWidget(self.use_exact_start_cb)
         self.start_time_edit = QTimeEdit()
@@ -703,102 +1243,112 @@ class BlockWidget(QFrame):
         self.start_time_edit.setDisplayFormat("HH:mm")
         now_t = QTime.currentTime()
         self.start_time_edit.setTime(QTime(now_t.hour(), now_t.minute(), 0))
-        self.start_time_edit.setFixedWidth(s(70))
+        self.start_time_edit.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.start_time_edit.setFixedWidth(field_width("88:88", buttons=False))
         self.start_time_edit.setEnabled(False)
         row_time.addWidget(self.start_time_edit)
-        row_time.addSpacing(10)
-        
-        lbl_cap = QLabel("Старт (> мин):")
-        lbl_cap.setStyleSheet(Styles.label_input())
-        row_time.addWidget(lbl_cap)
-        self.start_timeout_spin = QSpinBox()
-        self.start_timeout_spin.setStyleSheet(Styles.input_field())
-        self.start_timeout_spin.setRange(1, 24 * 60)
-        self.start_timeout_spin.setValue(30)
-        self.start_timeout_spin.setFixedWidth(s(70))
-        self.start_timeout_spin.valueChanged.connect(self._update_alert_info)
-        row_time.addWidget(self.start_timeout_spin)
         row_time.addStretch()
         settings_layout.addLayout(row_time)
 
         row_mode = QHBoxLayout()
+        row_mode.setSpacing(s(6))
         lbl_m = QLabel("Режим:")
         lbl_m.setStyleSheet(Styles.label_input())
         row_mode.addWidget(lbl_m)
         self.indicator_mode_combo = QComboBox()
         self.indicator_mode_combo.setStyleSheet(Styles.input_field())
+        self.indicator_mode_combo.setCursor(Qt.PointingHandCursor)
         self.indicator_mode_combo.addItems(["Статика", "Мигание"])
+        self.indicator_mode_combo.setMinimumWidth(field_width("Мигание", btn_ref=FIELD_COMBO_W))
         self.indicator_mode_combo.currentTextChanged.connect(self._on_indicator_mode_changed)
         row_mode.addWidget(self.indicator_mode_combo)
         row_mode.addStretch()
         settings_layout.addLayout(row_mode)
-        layout.addLayout(settings_layout)
+        outer.addWidget(card)
 
         btn_status_row = QHBoxLayout()
+        btn_status_row.setSpacing(s(8))
         self.start_btn = QPushButton("Запуск")
-        self.start_btn.setStyleSheet(Styles.btn_action())
+        self.start_btn.setStyleSheet(Styles.btn_primary())
+        self.start_btn.setCursor(Qt.PointingHandCursor)
         self.start_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.start_btn.clicked.connect(self.start)
         self.stop_btn = QPushButton("Стоп")
-        self.stop_btn.setStyleSheet(Styles.btn_action())
+        self.stop_btn.setStyleSheet(Styles.btn_stop())
+        self.stop_btn.setCursor(Qt.PointingHandCursor)
         self.stop_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self.stop)
         btn_status_row.addWidget(self.start_btn, 2)
         btn_status_row.addWidget(self.stop_btn, 1)
-        
-        self.status_label = QLabel("Остановлен")
-        self.status_label.setStyleSheet(Styles.status_stopped())
-        btn_status_row.addWidget(self.status_label)
-        layout.addLayout(btn_status_row)
+        outer.addLayout(btn_status_row)
 
+        info_card = QFrame()
+        info_card.setObjectName("infoCard")
+        info_card.setStyleSheet(Styles.info_card())
+        info_card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        info = QVBoxLayout(info_card)
+        info.setContentsMargins(s(10), s(9), s(10), s(9))
+        info.setSpacing(s(10))
         self.last_file_label = QLabel("Последний файл: —")
         self.last_file_label.setStyleSheet(Styles.info_text())
-        layout.addWidget(self.last_file_label)
-
+        self.last_file_label.setWordWrap(True)
+        self.last_file_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        info.addWidget(self.last_file_label)
         self.check_time_label = QLabel("Проверка: —")
         self.check_time_label.setWordWrap(True)
         self.check_time_label.setStyleSheet(Styles.info_text())
-        layout.addWidget(self.check_time_label)
-
+        self.check_time_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        info.addWidget(self.check_time_label)
+        self.no_file_label = QLabel("Нет: —")
+        self.no_file_label.setWordWrap(True)
+        self.no_file_label.setStyleSheet(Styles.info_text())
+        self.no_file_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        info.addWidget(self.no_file_label)
         self.alert_info = QLabel()
         self.alert_info.setStyleSheet(Styles.alert_text())
         self.alert_info.setWordWrap(True)
-        layout.addWidget(self.alert_info)
+        self.alert_info.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        info.addWidget(self.alert_info)
+        info.addStretch(1)
+        outer.addWidget(info_card)
         self._update_alert_info()
 
         self.detail_toggle_btn = QPushButton("▼ Показать данные")
         self.detail_toggle_btn.setStyleSheet(Styles.btn_action())
+        self.detail_toggle_btn.setCursor(Qt.PointingHandCursor)
         self.detail_toggle_btn.clicked.connect(self._toggle_detail_data)
-        layout.addWidget(self.detail_toggle_btn)
+        outer.addWidget(self.detail_toggle_btn)
 
         self.detail_data_widget = QWidget()
         self.detail_data_widget.setVisible(False)
         dd_layout = QVBoxLayout(self.detail_data_widget)
-        dd_layout.setContentsMargins(0, s(4), 0, 0)
-        dd_layout.setSpacing(s(6))
-
+        dd_layout.setContentsMargins(0, s(2), 0, 0)
+        dd_layout.setSpacing(s(8))
         self.btn_select_cols = QPushButton("Выбрать столбцы")
         self.btn_select_cols.setStyleSheet(Styles.btn_action())
+        self.btn_select_cols.setCursor(Qt.PointingHandCursor)
         self.btn_select_cols.clicked.connect(self._open_column_selector)
         dd_layout.addWidget(self.btn_select_cols)
-
         self.detail_scroll = QScrollArea()
+        self.detail_scroll.setObjectName("dataScroll")
         self.detail_scroll.setWidgetResizable(True)
         self.detail_scroll.setFrameShape(QFrame.NoFrame)
-        self.detail_scroll.setStyleSheet(f"QScrollArea {{ background: white; border: 1px solid #ddd; border-radius: {s(6)}px; }}")
+        self.detail_scroll.setStyleSheet(Styles.data_scroll())
         self.detail_data_label = QLabel("Нет данных")
+        self.detail_data_label.setObjectName("dataLabel")
         self.detail_data_label.setWordWrap(True)
         self.detail_data_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.detail_data_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.MinimumExpanding)
-        self.detail_data_label.setStyleSheet(f"font-size: {s(FONT_TEXT)}px; color: #222; padding: {s(6)}px; background: transparent; border: none;")
+        self.detail_data_label.setStyleSheet(Styles.data_label())
         self.detail_scroll.setWidget(self.detail_data_label)
-        
-        fm = QFontMetrics(QFont("", s(FONT_TEXT)))
-        self.detail_scroll.setFixedHeight((fm.lineSpacing() * 20) + s(16))
-
+        _f = QFont()
+        _f.setPixelSize(max(1, s(FONT_TEXT)))
+        fm = QFontMetrics(_f)
+        self.detail_scroll.setFixedHeight(fm.lineSpacing() * 20 + s(16))
         dd_layout.addWidget(self.detail_scroll)
-        layout.addWidget(self.detail_data_widget)
+        outer.addWidget(self.detail_data_widget)
+        outer.addStretch(1)
 
     def _build_compact_ui(self, parent):
         self.compact_layout = QVBoxLayout(parent)
@@ -806,61 +1356,57 @@ class BlockWidget(QFrame):
         self.compact_layout.setSpacing(0)
 
         self.compact_indicator = QFrame()
-        self.compact_indicator.setFixedHeight(s(20))
-        self.compact_indicator.setStyleSheet(Styles.indicator_strip("#999999", 13))
+        self.compact_indicator.setFixedHeight(s(18))
+        self.compact_indicator.setStyleSheet(Styles.indicator_strip(P.idle, R_CARD - 1))
         self.indicator_glow = QGraphicsDropShadowEffect(self)
-        self.indicator_glow.setBlurRadius(s(16))
+        self.indicator_glow.setBlurRadius(s(14))
         self.indicator_glow.setOffset(0, 0)
         self.compact_indicator.setGraphicsEffect(self.indicator_glow)
         self.compact_layout.addWidget(self.compact_indicator, 0)
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(s(8), s(8), s(8), s(8))
+        content_layout.setContentsMargins(s(10), s(10), s(10), s(10))
         content_layout.setSpacing(s(8))
 
-        # Header with Name and Collapse button
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
-        
+        header_layout.setSpacing(s(6))
         self.compact_name = ClickableLabel(self.custom_name)
         self.compact_name.setAlignment(Qt.AlignCenter)
         self.compact_name.setWordWrap(True)
-        self.compact_name.setFixedHeight(s(36))
+        self.compact_name.setFixedHeight(s(34))
         self.compact_name.setStyleSheet(Styles.compact_name())
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(s(8))
-        shadow.setColor(QColor(0, 0, 0, 60))
-        shadow.setOffset(0, 2)
-        self.compact_name.setGraphicsEffect(shadow)
+        self.compact_name.setCursor(Qt.PointingHandCursor)
         set_custom_tooltip(self.compact_name, self.folder_path)
         self.compact_name.clicked.connect(self._open_folder)
-        
         header_layout.addWidget(self.compact_name, 1)
-        
         self.collapse_btn = QPushButton("▲")
-        self.collapse_btn.setFixedSize(s(24), s(24))
-        self.collapse_btn.setStyleSheet("QPushButton { border: none; background: transparent; font-size: 16px; font-weight: bold; color: #555; } QPushButton:hover { color: #3498db; }")
+        self.collapse_btn.setFixedSize(s(26), s(26))
+        self.collapse_btn.setCursor(Qt.PointingHandCursor)
+        self.collapse_btn.setStyleSheet(Styles.ghost_btn())
         self.collapse_btn.clicked.connect(self._toggle_compact_collapse)
-        header_layout.addWidget(self.collapse_btn, 0)
-        
+        header_layout.addWidget(self.collapse_btn, 0, Qt.AlignVCenter)
         content_layout.addLayout(header_layout)
 
-        # Check time label under header
         self.compact_check_time_label = QLabel("Проверка: —")
         self.compact_check_time_label.setAlignment(Qt.AlignCenter)
         self.compact_check_time_label.setWordWrap(True)
-        self.compact_check_time_label.setStyleSheet(f"font-size: {s(12)}px; color: #666; background: transparent; border: none;")
+        self.compact_check_time_label.setFixedHeight(s(40))
+        self.compact_check_time_label.setStyleSheet(f"""
+            QLabel {{
+                color: {P.ink_soft}; font-size: {s(14)}px;
+                background: transparent; border: none;
+            }}
+        """)
         content_layout.addWidget(self.compact_check_time_label)
 
-        # Grid container
         self.compact_grid_container = QWidget()
         self.compact_grid_layout = QGridLayout(self.compact_grid_container)
         self.compact_grid_layout.setHorizontalSpacing(s(8))
         self.compact_grid_layout.setVerticalSpacing(s(8))
         self.compact_grid_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.addWidget(self.compact_grid_container, 1)
-
         self.compact_layout.addWidget(content, 1)
         self._rebuild_compact_grid()
 
@@ -871,59 +1417,52 @@ class BlockWidget(QFrame):
         self._update_block_height()
 
     def _rebuild_compact_grid(self):
-        for i in reversed(range(self.compact_grid_layout.count())): 
-            self.compact_grid_layout.itemAt(i).widget().setParent(None)
-            
+        for i in reversed(range(self.compact_grid_layout.count())):
+            w = self.compact_grid_layout.itemAt(i).widget()
+            if w is not None:
+                w.setParent(None)
         self.compact_value_labels, self.compact_indicators = {}, {}
-
         for i, (col_key, display_name) in enumerate(self.widget_columns):
             cell = ClickableFrame(col_key)
             cell.setObjectName("compactCell")
             cell.setStyleSheet(Styles.compact_cell_bg())
+            cell.setFixedHeight(s(60))
             cell.clicked.connect(self._copy_param_value)
-            
             cell_layout = QVBoxLayout(cell)
-            cell_layout.setContentsMargins(s(6), s(4), s(6), s(4))
+            cell_layout.setContentsMargins(s(8), s(6), s(8), s(6))
             cell_layout.setSpacing(s(2))
-
             top_row = QHBoxLayout()
             top_row.setSpacing(s(4))
-            
-            name_lbl = QLabel(display_name)
+            name_lbl = QLabel(display_name.strip())
             name_lbl.setStyleSheet(Styles.compact_cell_name())
             set_custom_tooltip(name_lbl, col_key)
             top_row.addWidget(name_lbl, 1)
-            
             ind_lbl = QFrame()
-            ind_lbl.setFixedSize(s(4), s(24))
+            ind_lbl.setFixedSize(s(5), s(16))
             ind_lbl.setStyleSheet(Styles.param_indicator("transparent"))
             top_row.addWidget(ind_lbl, 0, Qt.AlignRight | Qt.AlignVCenter)
-            
             cell_layout.addLayout(top_row)
-
             val_lbl = QLabel("—")
             val_lbl.setAlignment(Qt.AlignCenter)
             val_lbl.setStyleSheet(Styles.compact_cell_value())
             cell_layout.addWidget(val_lbl)
-
             self.compact_grid_layout.addWidget(cell, i // 2, i % 2)
             self.compact_value_labels[col_key] = val_lbl
             self.compact_indicators[col_key] = ind_lbl
-            
         self._update_data_label()
         self._update_block_height()
 
     def _update_block_height(self):
+        rows = (len(self.widget_columns) + 1) // 2
+        strip, pad, header, gap, check = s(18), s(10) * 2, s(34), s(8), s(40)
+        cell, vspace = s(60), s(8)
         if getattr(self, '_compact_collapsed', False):
-            new_height = s(125)
+            new_height = strip + pad + header + gap + check
         else:
-            rows = (len(self.widget_columns) + 1) // 2
-            base_h = s(135)
-            row_h = s(70)
-            new_height = max(s(160), base_h + rows * row_h)
-        
+            grid = rows * cell + max(0, rows - 1) * vspace
+            new_height = strip + pad + header + gap + check + gap + grid
         if self._compact:
-            self.setFixedSize(s(WIDGET_BLOCK_WIDTH), new_height)
+            self.setFixedSize(s(WIDGET_BLOCK_WIDTH), max(s(120), new_height))
 
     def _add_widget_parameter(self):
         current_keys = [c[0] for c in self.widget_columns]
@@ -982,9 +1521,7 @@ class BlockWidget(QFrame):
         elif self.parse_error: text = f"Ошибка: {self.parse_error}"
         elif not self.parsed_data: text = "Нет данных"
         else: text = "<br>".join(f"<b>{col}</b>: {self.parsed_data[col]}" for col in self.selected_columns if col in self.parsed_data) or "Нет данных"
-        
         if hasattr(self, "detail_data_label"): self.detail_data_label.setText(text)
-
         if hasattr(self, "compact_value_labels"):
             for col_key, label in self.compact_value_labels.items():
                 ind = self.compact_indicators.get(col_key)
@@ -993,7 +1530,7 @@ class BlockWidget(QFrame):
                     if ind: ind.setStyleSheet(Styles.param_indicator("transparent"))
                 elif self.parse_error:
                     label.setText("err")
-                    if ind: ind.setStyleSheet(Styles.param_indicator("#e74c3c"))
+                    if ind: ind.setStyleSheet(Styles.param_indicator(P.bad))
                 elif col_key in self.parsed_data:
                     val_str = str(self.parsed_data[col_key])
                     label.setText(val_str)
@@ -1001,9 +1538,11 @@ class BlockWidget(QFrame):
                         if col_key in PARAM_RANGES:
                             try:
                                 vmin, vmax = PARAM_RANGES[col_key]
-                                ind.setStyleSheet(Styles.param_indicator("#e74c3c" if not (vmin <= float(val_str) <= vmax) else "#2ecc71"))
-                            except ValueError: ind.setStyleSheet(Styles.param_indicator("transparent"))
-                        else: ind.setStyleSheet(Styles.param_indicator("transparent"))
+                                ind.setStyleSheet(Styles.param_indicator(P.bad if not (vmin <= float(val_str) <= vmax) else P.ok))
+                            except ValueError:
+                                ind.setStyleSheet(Styles.param_indicator(P.violet))
+                        else:
+                            ind.setStyleSheet(Styles.param_indicator(P.violet))
                 else:
                     label.setText("—")
                     if ind: ind.setStyleSheet(Styles.param_indicator("transparent"))
@@ -1026,7 +1565,7 @@ class BlockWidget(QFrame):
         self._apply_indicator_color()
 
     def _update_blink_state(self):
-        if self._base_color_hex == "#e74c3c" and self.indicator_mode_combo.currentText() == "Мигание":
+        if self._base_color_hex == P.bad and self.indicator_mode_combo.currentText() == "Мигание":
             if not self.blink_timer.isActive(): self.blink_timer.start()
         else:
             self.blink_timer.stop()
@@ -1054,26 +1593,33 @@ class BlockWidget(QFrame):
     def _update_alert_info(self):
         if self.use_period_alert_cb.isChecked():
             p, mult = self.period_spin.value(), self.multiplier_spin.value()
-            self.alert_info.setText("Тревога > %.1f мин (%.1f × период)." % (p * mult, mult))
+            self.alert_info.setText("Тревога > %.1f мин (период %d × %.1f)." % (p * mult, p, mult))
         else:
             self.alert_info.setText("Тревога > %d мин с момента прихода последнего файла." % self.start_timeout_spin.value())
 
     def _on_exact_start_toggled(self, checked): self.start_time_edit.setEnabled(checked and not self._running)
+
+    def _on_multiplier_toggled(self, checked):
+        active = checked and not self._running
+        self.multiplier_spin.setEnabled(active)
+        self.lbl_mult.setEnabled(active)
+        self._update_alert_info()
+    
     def _set_circle(self, color):
-        self._base_color_hex = {"gray": "#999999", "green": "#2ecc71", "red": "#e74c3c"}.get(color, color)
+        self._base_color_hex = {"gray": P.idle, "green": P.ok, "red": P.bad}.get(color, color)
         self._update_blink_state()
 
     def _apply_indicator_color(self):
         c = QColor(self._base_color_hex)
-        alpha = 60 if (self.blink_timer.isActive() and self._blink_state) else 255
+        alpha = 70 if (self.blink_timer.isActive() and self._blink_state) else 255
         color_style = f"rgba({c.red()}, {c.green()}, {c.blue()}, {alpha})"
         glow_c = QColor(c)
-        glow_c.setAlpha(int(alpha * 0.8))
+        glow_c.setAlpha(int(alpha * 0.75))
         if hasattr(self, "circle"):
-            self.circle.setStyleSheet(Styles.indicator(color_style, 8))
+            self.circle.setStyleSheet(Styles.indicator(color_style, 7))
             self.circle_glow.setColor(glow_c)
         if hasattr(self, "compact_indicator"):
-            self.compact_indicator.setStyleSheet(Styles.indicator_strip(color_style, 13))
+            self.compact_indicator.setStyleSheet(Styles.indicator_strip(color_style, R_CARD - 1))
             self.indicator_glow.setColor(glow_c)
 
     def _update_last_file_label(self):
@@ -1088,38 +1634,34 @@ class BlockWidget(QFrame):
             set_custom_tooltip(self.compact_indicator, text)
 
     def _update_check_times(self):
-        if not self._running:
-            text = "Проверка: остановлен"
-        else:
+        ref_time = self.last_file_time or self._watch_start
+        no_file_str = "Нет: —"
+        if ref_time is not None:
+            delta_sec = max(0, int((datetime.now() - ref_time).total_seconds()))
+            days = delta_sec // 86400
+            hours = (delta_sec % 86400) // 3600
+            minutes = (delta_sec % 3600) // 60
+            if days > 0:
+                dur = f"{days} д {hours} ч"
+            elif hours > 0:
+                dur = f"{hours} ч {minutes} мин"
+            elif minutes > 0:
+                dur = f"{minutes} мин"
+            else:
+                dur = "менее минуты"
+            no_file_str = f"Нет: {dur}"
+        if self._running:
             last_str = self.last_check_time.strftime("%H:%M:%S")
             next_str = self.next_check_time.strftime("%H:%M:%S") if self.next_check_time else "—"
-
-            no_file_str = ""
-            ref_time = self.last_file_time or self._watch_start
-            if ref_time:
-                delta_sec = max(0, int((datetime.now() - ref_time).total_seconds()))
-                threshold = (self.period_spin.value() * self.multiplier_spin.value()) if self.use_period_alert_cb.isChecked() else self.start_timeout_spin.value()
-                
-                if (delta_sec / 60.0) > threshold:
-                    days = delta_sec // 86400
-                    hours = (delta_sec % 86400) // 3600
-                    minutes = (delta_sec % 3600) // 60
-                    
-                    if days > 0:
-                        no_file_str = f"Нет: {days} д {hours} ч"
-                    elif hours > 0:
-                        no_file_str = f"Нет: {hours} ч {minutes} мин"
-                    else:
-                        no_file_str = f"Нет: {minutes} мин"
-
-            text = f"Посл: {last_str} | След: {next_str}"
-            if no_file_str:
-                text += f"\n{no_file_str}"
-
+            head = f"Посл: {last_str} | След: {next_str}"
+        else:
+            head = "Проверка: остановлен"
         if hasattr(self, "check_time_label"):
-            self.check_time_label.setText(text)
+            self.check_time_label.setText(head)
+        if hasattr(self, "no_file_label"):
+            self.no_file_label.setText(no_file_str)
         if hasattr(self, "compact_check_time_label"):
-            self.compact_check_time_label.setText(text)
+            self.compact_check_time_label.setText(head + "\n" + no_file_str)
 
     def start(self):
         if self._running: return
@@ -1131,9 +1673,7 @@ class BlockWidget(QFrame):
         
         for w in (self.start_btn, self.period_spin, self.multiplier_spin, self.use_period_alert_cb, self.start_timeout_spin, self.use_exact_start_cb, self.start_time_edit): w.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self.status_label.setText("Работает")
-        self.status_label.setStyleSheet(Styles.status_running())
-        
+        self.lbl_mult.setEnabled(False)
         self.check_files(initial=True)
         self._schedule_next_check()
         self.fetch_file_data(force=True)
@@ -1145,11 +1685,10 @@ class BlockWidget(QFrame):
         self.timer.stop()
         self._update_check_times()
         
-        for w in (self.start_btn, self.period_spin, self.multiplier_spin, self.use_period_alert_cb, self.start_timeout_spin, self.use_exact_start_cb): w.setEnabled(True)
+        for w in (self.start_btn, self.period_spin, self.use_period_alert_cb, self.start_timeout_spin, self.use_exact_start_cb): w.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.start_time_edit.setEnabled(self.use_exact_start_cb.isChecked())
-        self.status_label.setText("Остановлен")
-        self.status_label.setStyleSheet(Styles.status_stopped())
+        self._on_multiplier_toggled(self.use_period_alert_cb.isChecked())
         self._set_circle("gray")
 
     def is_running(self): return self._running
@@ -1264,6 +1803,7 @@ class BlocksContainer(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
+        self.setObjectName("blocksRoot")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         self.stack = QStackedWidget(self)
@@ -1273,13 +1813,15 @@ class BlocksContainer(QWidget):
         main_layout.addWidget(self.stack)
 
         self.normal_page = QWidget()
+        self.normal_page.setObjectName("blocksPage")
         self.normal_layout = QVBoxLayout(self.normal_page)
         self.normal_layout.setAlignment(Qt.AlignTop)
         self.normal_layout.setSpacing(s(8))
-        self.normal_layout.setContentsMargins(s(8), s(8), s(8), s(8))
+        self.normal_layout.setContentsMargins(s(12), s(12), s(12), s(12))
         self.stack.addWidget(self.normal_page)
 
         self.compact_page = QWidget()
+        self.compact_page.setObjectName("blocksPage")
         self.compact_page.setContentsMargins(0, 0, 0, 0)
         self.compact_layout = FlowLayout(self.compact_page, margin=s(16), h_spacing=s(24), v_spacing=s(24))
         self.stack.addWidget(self.compact_page)
@@ -1579,6 +2121,7 @@ class MainWindow(QMainWindow):
         self.central_widget = QWidget()
         self.central_widget.setObjectName("centralWidget")
         self.central_widget.setAttribute(Qt.WA_StyledBackground, True)
+        self.central_widget.setStyleSheet(Styles.shell_normal() + Styles.app_shell())
         self.setCentralWidget(self.central_widget)
         
         main_layout = QVBoxLayout(self.central_widget)
@@ -1605,9 +2148,11 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.top_bar_widget)
 
         self.scroll = QScrollArea()
+        self.scroll.setObjectName("mainScroll")
         self.scroll.setWidgetResizable(True)
         self.scroll.setAcceptDrops(False)
         self.scroll.viewport().setAcceptDrops(False)
+        self.scroll.viewport().setObjectName("mapViewport")
         self.scroll.setFrameShape(QFrame.NoFrame)
         
         self.blocks_container = BlocksContainer()
@@ -1689,10 +2234,8 @@ class MainWindow(QMainWindow):
         self.top_bar_widget.setVisible(False)
         self.drag_panel.setVisible(True)
         self._main_layout.setContentsMargins(s(0), 0, s(0), 0)
-        self.setStyleSheet("QMainWindow { background-color: white; }")
-        self.central_widget.setStyleSheet(Styles.central_widget())
-
-        for w in (self.scroll, self.scroll.viewport(), self.blocks_container): w.setStyleSheet(Styles.transparent_bg())
+        self.setStyleSheet(f"QMainWindow {{ background-color: {P.bg}; }}")
+        self.central_widget.setStyleSheet(Styles.central_widget() + Styles.app_shell())
         
         self.blocks_container.set_compact(True)
         for b in self.blocks_container.blocks: b.set_compact(True)
@@ -1709,13 +2252,14 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+
     def _exit_widget_mode(self):
         if not self._widget_mode: return
         self._widget_mode = False
         self.hide()
         self.setWindowFlags(self._normal_flags)
         self.setStyleSheet("")
-        self.central_widget.setStyleSheet("")
+        self.central_widget.setStyleSheet(Styles.shell_normal() + Styles.app_shell())
 
         for b in self.blocks_container.blocks: b.set_compact(False)
         self.blocks_container.set_compact(False)
@@ -1726,7 +2270,6 @@ class MainWindow(QMainWindow):
         self._main_layout.setContentsMargins(s(8), s(8), s(8), s(8))
         self.resize_grip.setVisible(False)
 
-        for w in (self.scroll, self.scroll.viewport(), self.blocks_container): w.setStyleSheet("")
 
         self.setMinimumSize(s(800), s(600))
         self.show()
@@ -1787,9 +2330,11 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     app = QApplication(sys.argv)
-    if (screen := app.primaryScreen()):
-        UI_SCALE = max(0.8, (screen.geometry().height() * screen.devicePixelRatio() / 1080.0) / 2.0)
+    init_ui_scale(app.primaryScreen())
+    print(f"[scale] mode={SCALE_MODE} UI_SCALE={UI_SCALE:.3f} s(16)={s(16)}")  # диагностика, потом удалить
+
 
     app.setOrganizationName("FileWatcher")
     app.setApplicationName("FileDateWatcher")
