@@ -1,0 +1,1800 @@
+import sys
+import os
+from datetime import datetime, timedelta
+
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QPushButton,
+    QSpinBox, QDoubleSpinBox, QScrollArea, QFrame, QSystemTrayIcon, QMenu, QDialog,
+    QAbstractItemView, QStyle, QSizePolicy, QCheckBox, QTimeEdit,
+    QStackedWidget, QLayout, QLineEdit, QGraphicsDropShadowEffect, QComboBox
+)
+from PyQt5.QtCore import (
+    Qt, QTimer, QTime, QPoint, QRect, QSize, QUrl, QSettings, pyqtSignal,
+    QThreadPool, QRunnable, QObject, QEvent, QMimeData 
+)
+from PyQt5.QtGui import (
+    QColor, QDesktopServices, QPainter, QPen, QFontMetrics, QFont, QDrag )
+
+# ---------------------------------------------------------------------------
+# ГЛОБАЛЬНЫЕ НАСТРОЙКИ
+# ---------------------------------------------------------------------------
+UI_SCALE = 1.0
+def s(val): return int(val * UI_SCALE)
+
+FONT_XL, FONT_L, FONT_TITLE = 32, 24, 20
+FONT_BTN_MAIN, FONT_BTN, FONT_INPUT = 16, 20, 18
+FONT_TABLE, FONT_MENU, FONT_TEXT = 16, 14, 18
+FONT_TEXT_COMPACT = 16
+
+ALL_COLUMNS = [
+    "filename", "date", "time", "DOY", "daytime", "file_records", "used_records",
+    "Tau", "qc_Tau", "rand_err_Tau", "H", "qc_H", "rand_err_H", "LE", "qc_LE", "rand_err_LE", 
+    "co2_flux", "qc_co2_flux", "rand_err_co2_flux", "h2o_flux", "qc_h2o_flux", "rand_err_h2o_flux", 
+    "ch4_flux", "qc_ch4_flux", "rand_err_ch4_flux", "none_flux", "qc_none_flux", "rand_err_none_flux",
+    "H_strg", "LE_strg", "co2_strg", "h2o_strg", "ch4_strg", "none_strg",
+    "co2_v-adv", "h2o_v-adv", "ch4_v-adv", "none_v-adv",
+    "co2_molar_density", "co2_mole_fraction", "co2_mixing_ratio", "co2_time_lag", "co2_def_timelag",
+    "h2o_molar_density", "h2o_mole_fraction", "h2o_mixing_ratio", "h2o_time_lag", "h2o_def_timelag",
+    "ch4_molar_density", "ch4_mole_fraction", "ch4_mixing_ratio", "ch4_time_lag", "ch4_def_timelag",
+    "none_molar_density", "none_mole_fraction", "none_mixing_ratio", "none_time_lag", "none_def_timelag",
+    "sonic_temperature", "air_temperature", "air_pressure", "air_density", 
+    "air_heat_capacity", "air_molar_volume", "ET", "water_vapor_density", 
+    "e", "es", "specific_humidity", "RH", "VPD", "Tdew",
+    "u_unrot", "v_unrot", "w_unrot", "u_rot", "v_rot", "w_rot",
+    "wind_speed", "max_wind_speed", "wind_dir", "yaw", "pitch", "roll",
+    "u*", "TKE", "L", "(z-d)/L", "bowen_ratio", "T*", 
+    "model", "x_peak", "x_offset", "x_10%", "x_30%", "x_50%", "x_70%", "x_90%",
+    "un_Tau", "Tau_scf", "un_H", "H_scf", "un_LE", "LE_scf", 
+    "un_co2_flux", "co2_scf", "un_h2o_flux", "h2o_scf", 
+    "un_ch4_flux", "ch4_scf", "un_none_flux", "un_none_scf",
+    "spikes_hf", "amplitude_resolution_hf", "drop_out_hf", "absolute_limits_hf",
+    "skewness_kurtosis_hf", "skewness_kurtosis_sf", "discontinuities_hf", "discontinuities_sf",
+    "timelag_hf", "timelag_sf", "attack_angle_hf", "non_steady_wind_hf",
+    "u_spikes", "v_spikes", "w_spikes", "ts_spikes", "co2_spikes", "h2o_spikes", "ch4_spikes", "none_spikes",
+    "head_detect_LI-7200", "t_out_LI-7200", "t_in_LI-7200", "aux_in_LI-7200", 
+    "delta_p_LI-7200", "chopper_LI-7200", "detector_LI-7200", "pll_LI-7200", "sync_LI-7200", 
+    "chopper_LI-7500", "detector_LI-7500", "pll_LI-7500", "sync_LI-7500",
+    "not_ready_LI-7700", "no_signal_LI-7700", "re_unlocked_LI-7700", "bad_temp_LI-7700",
+    "laser_temp_unregulated_LI-7700", "block_temp_unregulated_LI-7700", "motor_spinning_LI-7700",
+    "pump_on_LI-7700", "top_heater_on_LI-7700", "bottom_heater_on_LI-7700", "calibrating_LI-7700",
+    "motor_failure_LI-7700", "bad_aux_tc1_LI-7700", "bad_aux_tc2_LI-7700", "bad_aux_tc3_LI-7700",
+    "box_connected_LI-7700", "mean_value_RSSI_LI-7200", "mean_value_LI-7500",
+    "u_var", "v_var", "w_var", "ts_var", "co2_var", "h2o_var", "ch4_var", "none_var",
+    "w/ts_cov", "w/co2_cov", "w/h2o_cov", "w/ch4_cov", "w/none_cov",
+    "co2_mean", "h2o_mean", "air_p_mean", "vin_sf_mean", "dew_point_mean",
+    "avg_signal_strength_7200_mean", "co2_signal_strength_7200_mean", 
+    "h2o_signal_strength_7200_mean", "delta_signal_strength_7200_mean",
+    "flowrate_mean", "hit_power_mean", "hit_vin_mean", "ch4_mean", "rssi_77_mean", "CHK"
+]
+
+PARAM_RANGES = {
+    "co2_molar_density": (14.0, 25.0), "co2_mixing_ratio": (350.0, 600.0),
+    "h2o_molar_density": (100.0, 1200.0), "h2o_mixing_ratio": (3.0, 30.0),
+    "ch4_mixing_ratio": (1.5, 6.0), "ch4_molar_density": (0.05, 0.2),
+    "air_pressure": (96000.0, 100000.0), "flowrate_mean": (10.0, 15.0),
+    "co2_signal_strength_7200_mean": (85.0, 100.0), "h2o_signal_strength_7200_mean": (85.0, 100.0),
+    "avg_signal_strength_7200_mean": (85.0, 100.0), "delta_signal_strength_7200_mean": (0.0, 3.0),
+    "rssi_77_mean": (40.0, 85.0), "mean_value_RSSI_LI-7200": (40.0, 100.0),
+    "u_unrot": (-15.0, 15.0), "v_unrot": (-15.0, 15.0), "w_unrot": (-2.0, 2.0),
+    "wind_speed": (0.0, 20.0), "wind_dir": (0.0, 360.0),
+    "sonic_temperature": (-40.0, 50.0), "air_temperature": (-40.0, 40.0), "RH": (20.0, 100.0),
+    "t_out_LI-7200": (0.0, 0.0), "t_in_LI-7200": (0.0, 0.0)
+}
+
+TEMP_COLUMNS = {"sonic_temperature", "air_temperature", "Tdew"}
+
+WIDGET_MAIN_COLUMNS = [
+    ("date", "Дата"), ("time", "Время"),
+    ("co2_mixing_ratio", "CO2 ppm"), ("ch4_mixing_ratio", "CH4 ppb"),
+    ("sonic_temperature", "TS (°C)"), ("air_temperature", "TA (°C)"),
+    ("wind_speed", "U (m/s)"), ("wind_dir", "Dir (°)"),
+    ("mean_value_RSSI_LI-7200", "RSSI 7200"), ("rssi_77_mean", "RSSI 7700"),
+    ("co2_signal_strength_7200_mean", "CO2 SS"), 
+    ("t_out_LI-7200", "T_out"), ("t_in_LI-7200", "T_in")
+]
+
+WIDGET_BLOCK_WIDTH = 300
+WIDGET_BLOCK_HEIGHT = 550
+
+# ---------------------------------------------------------------------------
+# СТИЛИ
+# ---------------------------------------------------------------------------
+class Styles:
+    drag_panel = staticmethod(lambda: "#dragPanel { background: transparent; border-bottom: 1px solid #ddd; }")
+    drag_grip = staticmethod(lambda: f"color: #999; font-size: {s(FONT_L)}px; font-weight: bold; border: none;")
+    expand_btn = staticmethod(lambda: f"QPushButton {{ border: 1px solid #ccc; background: white; border-radius: {s(6)}px; font-size: {s(FONT_TITLE)}px; font-weight: bold; color: #555; }} QPushButton:hover {{ background: #eee; }}")
+    block_detail = staticmethod(lambda: f"#block {{ border: 1px solid #888; border-radius: {s(8)}px; padding: {s(6)}px; background: #f8f8f8; }}")
+    block_compact = staticmethod(lambda: f"#block {{ border: 1px solid #ccc; border-radius: {s(14)}px; background: #f8f8f8; padding: 0px; }}")
+    name_edit = staticmethod(lambda: f"QLineEdit {{ border: 1px solid transparent; background: transparent; font-weight: bold; font-size: {s(FONT_TITLE)}px; padding: {s(2)}px; }} QLineEdit:hover {{ border-bottom: 1px solid #aaa; }} QLineEdit:focus {{ border: 1px solid #3498db; border-radius: {s(4)}px; background: white; }}")
+    delete_btn = staticmethod(lambda: f"font-size: {s(FONT_BTN)}px;")
+    path_label = staticmethod(lambda: f"color: #666; font-size: {s(FONT_TEXT)}px;")
+    label_input = staticmethod(lambda: f"font-size: {s(FONT_INPUT)}px; color: #333;")
+    input_field = staticmethod(lambda: f"font-size: {s(FONT_INPUT)}px; padding: {s(2)}px;")
+    btn_action = staticmethod(lambda: f"font-size: {s(FONT_BTN)}px; padding: {s(6)}px;")
+    status_stopped = staticmethod(lambda: f"color: #666; font-size: {s(FONT_INPUT)}px; margin-left: {s(10)}px;")
+    status_running = staticmethod(lambda: f"color: green; font-size: {s(FONT_INPUT)}px; margin-left: {s(10)}px;")
+    info_text = staticmethod(lambda: f"color: #555; font-size: {s(FONT_TEXT)}px;")
+    alert_text = staticmethod(lambda: f"color: #888; font-size: {s(FONT_TEXT)}px;")
+    indicator = staticmethod(lambda color_style, radius: f"background-color: {color_style}; border-radius: {s(radius)}px;")
+    indicator_strip = staticmethod(lambda color_style, top_radius: f"background-color: {color_style}; border-top-left-radius: {s(top_radius)}px; border-top-right-radius: {s(top_radius)}px; border-bottom-left-radius: 0px; border-bottom-right-radius: 0px;")
+    compact_name = staticmethod(lambda: f"ClickableLabel {{ font-size: {s(FONT_TEXT_COMPACT)}px; font-weight: bold; color: #222; background-color: white; border: 1px solid #ddd; border-radius: {s(8)}px; padding: {s(2)}px; }} ClickableLabel:hover {{ border: 2px solid #3498db; }}")
+    hint = staticmethod(lambda: f"color: gray; padding: {s(30)}px; font-size: {s(FONT_TITLE)}px;")
+    hint_compact = staticmethod(lambda: f"color: gray; font-size: {s(FONT_XL)}px; padding: {s(4)}px;")
+    clear_btn = staticmethod(lambda: f"font-size: {s(FONT_BTN)}px; padding: {s(4)}px {s(8)}px;")
+    table = staticmethod(lambda: f"QTableWidget {{ font-size: {s(FONT_TABLE)}px; }} QHeaderView::section {{ font-size: {s(FONT_TABLE)}px; }}")
+    btn_main = staticmethod(lambda: f"font-size: {s(FONT_BTN_MAIN)}px; padding: {s(6)}px {s(12)}px;")
+    central_widget = staticmethod(lambda: "#centralWidget { background-color: #f8f8f8; border: 1px solid #888; }")
+    transparent_bg = staticmethod(lambda: "background: transparent; border: none;")
+    separator = staticmethod(lambda: "background-color: #e0e0e0; border: none;")
+    compact_cell_name = staticmethod(lambda: f"font-size: {s(16)}px; color: #666; background: transparent; border: none;")
+    compact_cell_value = staticmethod(lambda: f"font-size: {s(20)}px; color: #111; font-weight: bold; background: transparent; border: none;")
+    param_indicator = staticmethod(lambda color: f"background-color: {color}; border-radius: {s(4)}px;")
+    compact_cell_bg = staticmethod(lambda: f"QFrame#compactCell {{ background-color: white; border: 1px solid #ddd; border-radius: {s(8)}px; }} QFrame#compactCell:hover {{ border: 2px solid #3498db; }}")
+    
+    @staticmethod
+    def menu():
+        return f"""
+            QMenu {{
+                background-color: #ffffff;
+                color: #000000;
+                border: 1px solid #cccccc;
+                padding: {s(4)}px;
+                font-size: {s(FONT_MENU)}px;
+            }}
+            QMenu::item {{
+                background-color: transparent;
+                padding: {s(6)}px {s(24)}px {s(6)}px {s(12)}px;
+                border-radius: {s(4)}px;
+            }}
+            QMenu::item:selected {{
+                background-color: #3498db;
+                color: #ffffff;
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background-color: #dddddd;
+                margin: {s(4)}px {s(8)}px;
+            }}
+        """
+
+    @staticmethod
+    def dialog_style():
+        return f"""
+            QDialog {{ background-color: #f8f8f8; }}
+            QLabel {{ color: #222222; }}
+            QCheckBox {{ color: #222222; font-size: {s(FONT_INPUT)}px; background: transparent; }}
+            QLineEdit {{ color: #000000; background-color: #ffffff; border: 1px solid #cccccc; border-radius: {s(4)}px; padding: {s(4)}px; font-size: {s(FONT_INPUT)}px; }}
+            QScrollArea {{ background-color: #ffffff; border: 1px solid #cccccc; border-radius: {s(4)}px; }}
+            QScrollArea > QWidget > QWidget {{ background-color: #ffffff; }}
+            QTableWidget {{ background-color: #ffffff; color: #000000; }}
+        """
+
+# ---------------------------------------------------------------------------
+# КАСТОМНЫЕ ТУЛТИПЫ
+# ---------------------------------------------------------------------------
+class CustomToolTipManager(QObject):
+    def __init__(self):
+        super().__init__()
+        self.label = None
+        self.style_sheet = f"""
+            QLabel {{
+                background-color: #ffffff;
+                color: #000000;
+                border: 1px solid #999999;
+                border-radius: {s(6)}px;
+                padding: {s(6)}px {s(10)}px;
+                font-size: {s(FONT_TEXT)}px;
+            }}
+        """
+
+    def _ensure_label(self):
+        if self.label is None:
+            self.label = QLabel()
+            self.label.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+            self.label.setAttribute(Qt.WA_TransparentForMouseEvents)
+            self.label.setStyleSheet(self.style_sheet)
+            self.label.hide()
+
+    def show_text(self, text, target_pos):
+        self._ensure_label()
+        if not text: return
+        self.label.setText(text)
+        self.label.adjustSize()
+        
+        x, y = target_pos.x(), target_pos.y()
+        screen = QApplication.screenAt(target_pos) or QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            if x + self.label.width() > geo.right(): x = geo.right() - self.label.width()
+            if y + self.label.height() > geo.bottom(): y = geo.bottom() - self.label.height()
+            if x < geo.left(): x = geo.left()
+            if y < geo.top(): y = geo.top()
+            
+        self.label.move(x, y)
+        self.label.show()
+
+    def hide_tooltip(self):
+        if self.label is not None:
+            self.label.hide()
+
+tooltip_manager = CustomToolTipManager()
+
+class ToolTipFilter(QObject):
+    def __init__(self, text, parent=None):
+        super().__init__(parent)
+        self.text = text
+
+    def setText(self, text):
+        self.text = text
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.ToolTip:
+            tooltip_manager._ensure_label()
+            tooltip_manager.label.setText(self.text)
+            tooltip_manager.label.adjustSize()
+            
+            center_x = obj.mapToGlobal(QPoint(obj.width() // 2, 0)).x()
+            y = obj.mapToGlobal(QPoint(0, obj.height())).y() + s(5)
+            
+            screen = QApplication.screenAt(QPoint(center_x, y)) or QApplication.primaryScreen()
+            if screen and y + tooltip_manager.label.height() > screen.availableGeometry().bottom():
+                y = obj.mapToGlobal(QPoint(0, 0)).y() - tooltip_manager.label.height() - s(5)
+                
+            tooltip_manager.show_text(self.text, QPoint(center_x - tooltip_manager.label.width() // 2, y))
+            return True
+        elif event.type() in (QEvent.Leave, QEvent.MouseButtonPress):
+            tooltip_manager.hide_tooltip()
+        return False
+
+def set_custom_tooltip(widget, text):
+    filter_obj = ToolTipFilter(text, widget)
+    widget.installEventFilter(filter_obj)
+    widget._custom_tooltip_filter = filter_obj
+
+# ---------------------------------------------------------------------------
+# ФОНОВЫЕ ПОТОКИ
+# ---------------------------------------------------------------------------
+class WorkerSignals(QObject):
+    finished = pyqtSignal(list, bool, datetime, object)
+    error = pyqtSignal(str, datetime)
+    data_parsed = pyqtSignal(dict, str, object)
+
+class ScanWorker(QRunnable):
+    def __init__(self, folder_path, last_check_time, initial):
+        super().__init__()
+        self.folder_path, self.last_check_time, self.initial = folder_path, last_check_time, initial
+        self.signals = WorkerSignals()
+
+    def run(self):
+        start_time = datetime.now()
+        found, max_file_time = [], None
+        try:
+            with os.scandir(self.folder_path) as it:
+                for entry in it:
+                    try:
+                        if entry.is_file():
+                            st = entry.stat()
+                            ctime = datetime.fromtimestamp(st.st_ctime if st.st_ctime > 946684800 else st.st_mtime)
+                            if max_file_time is None or ctime > max_file_time: max_file_time = ctime
+                            if self.initial or ctime > self.last_check_time: found.append((entry.name, ctime))
+                    except OSError: continue
+        except Exception as e:
+            self.signals.error.emit(str(e), start_time)
+            return
+        self.signals.finished.emit(found, self.initial, start_time, max_file_time)
+
+class FileParseWorker(QRunnable):
+    TAIL_BYTES = 65536
+    def __init__(self, folder_path, selected_columns):
+        super().__init__()
+        self.folder_path, self.selected_columns = folder_path, selected_columns
+        self.signals = WorkerSignals()
+
+    def run(self):
+        try:
+            latest_path, latest_mtime = None, -1.0
+            with os.scandir(self.folder_path) as it:
+                for entry in it:
+                    if entry.is_file() and entry.name.endswith('.txt'):
+                        m = entry.stat().st_mtime
+                        if m > latest_mtime: latest_mtime, latest_path = m, entry.path
+
+            if not latest_path:
+                self.signals.data_parsed.emit({}, "Файл не найден", None)
+                return
+
+            with open(latest_path, 'rb') as f:
+                header_line = f.readline()
+                if not header_line:
+                    self.signals.data_parsed.emit({}, "Файл пуст", None)
+                    return
+                headers = header_line.decode('utf-8', errors='ignore').rstrip('\n').split('\t')
+                idx_date, idx_time = headers.index('date') if 'date' in headers else 0, headers.index('time') if 'time' in headers else 1
+                
+                col_indices = {col: headers.index(col) for col in self.selected_columns if col in headers}
+                max_needed = max([idx_date, idx_time] + list(col_indices.values())) if col_indices else max(idx_date, idx_time)
+
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                if size <= len(header_line):
+                    self.signals.data_parsed.emit({}, "Файл повреждён", None)
+                    return
+
+                read_size, latest_data = min(self.TAIL_BYTES, size), None
+                while True:
+                    f.seek(size - read_size)
+                    chunk = f.read(read_size)
+                    for raw in reversed(chunk.split(b'\n')):
+                        if not raw.startswith(b'DATA\t'): continue
+                        parts = raw.decode('utf-8', errors='ignore').split('\t')
+                        if len(parts) <= max_needed: continue
+                        try:
+                            datetime.strptime(f"{parts[idx_date]} {parts[idx_time]}", "%Y-%m-%d %H:%M:%S")
+                            latest_data = parts
+                            break
+                        except Exception: continue
+                    
+                    if latest_data is not None or read_size >= size: break
+                    read_size = min(read_size * 4, size)
+
+                if not latest_data:
+                    self.signals.data_parsed.emit({}, "Нет валидных DATA-строк", None)
+                    return
+
+                result = {}
+                for col_name, idx in col_indices.items():
+                    if idx < len(latest_data):
+                        val = latest_data[idx].strip()
+                        try:
+                            f_val = float(val)
+                            if col_name in TEMP_COLUMNS: f_val -= 273.15
+                            val = str(int(f_val)) if f_val.is_integer() else f"{f_val:.2f}"
+                        except Exception: pass
+                        result[col_name] = val
+
+                self.signals.data_parsed.emit(result, "", os.path.getmtime(latest_path))
+        except OSError as e:
+            self.signals.data_parsed.emit({}, str(e), None)
+
+# ---------------------------------------------------------------------------
+# ДИАЛОГ ВЫБОРА СТОЛБЦОВ
+# ---------------------------------------------------------------------------
+class ColumnSelectDialog(QDialog):
+    def __init__(self, all_columns, selected_columns, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Выбор столбцов")
+        self.resize(s(400), s(600))
+        self.setStyleSheet(Styles.dialog_style())
+        
+        layout = QVBoxLayout(self)
+        
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Поиск столбца...")
+        layout.addWidget(self.search_edit)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content, vbox = QWidget(), QVBoxLayout()
+        scroll.setWidget(content)
+        
+        self.checkboxes = {}
+        for col in all_columns:
+            cb = QCheckBox(col)
+            cb.setChecked(col in selected_columns)
+            self.checkboxes[col] = cb
+            vbox.addWidget(cb)
+            self.search_edit.textChanged.connect(lambda text, c=cb, n=col: c.setVisible(text.lower() in n.lower()))
+            
+        content.setLayout(vbox)
+        layout.addWidget(scroll)
+
+        btn_save = QPushButton("Сохранить")
+        btn_save.setStyleSheet(Styles.btn_main())
+        btn_save.clicked.connect(self.accept)
+        layout.addWidget(btn_save)
+
+    def get_selected(self):
+        return [col for col, cb in self.checkboxes.items() if cb.isChecked()]
+
+# ---------------------------------------------------------------------------
+# КОМПОНЕНТЫ
+# ---------------------------------------------------------------------------
+class ClickableLabel(QLabel):
+    clicked = pyqtSignal()
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+            event.accept()
+        else: super().mousePressEvent(event)
+
+class ClickableFrame(QFrame):
+    clicked = pyqtSignal(str)
+    def __init__(self, col_key, parent=None):
+        super().__init__(parent)
+        self.col_key = col_key
+        self.setCursor(Qt.PointingHandCursor)
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.col_key)
+            event.accept()
+        else: super().mousePressEvent(event)
+
+class ResizeGrip(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(s(20), s(20))
+        self.setCursor(Qt.SizeFDiagCursor)
+        self._drag_pos = None
+        self._resize_start_size = None
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor(150, 150, 150), 2.0))
+        for i in range(3):
+            offset = s(i * 6 + 4)
+            painter.drawLine(s(20) - offset, s(18), s(18), s(20) - offset)
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPos()
+            self._resize_start_size = self.window().size()
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton and self._drag_pos is not None:
+            delta = event.globalPos() - self._drag_pos
+            self.window().resize(self._resize_start_size + QSize(delta.x(), delta.y()))
+    def mouseReleaseEvent(self, event): self._drag_pos = None
+
+class DragPanel(QFrame):
+    expand_clicked = pyqtSignal()
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(s(40))
+        self.setObjectName("dragPanel")
+        self.setStyleSheet(Styles.drag_panel())
+        self._drag_pos = None
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(s(12), s(4), s(12), s(4))
+        
+        grip = QLabel("≡")
+        grip.setStyleSheet(Styles.drag_grip())
+        layout.addWidget(grip, 0, Qt.AlignLeft | Qt.AlignVCenter)
+        layout.addStretch()
+        
+        self.expand_btn = QPushButton("⤢")
+        self.expand_btn.setFixedSize(s(36), s(28))
+        self.expand_btn.setStyleSheet(Styles.expand_btn())
+        self.expand_btn.clicked.connect(self.expand_clicked.emit)
+        layout.addWidget(self.expand_btn, 0, Qt.AlignRight | Qt.AlignVCenter)
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPos() - self.window().frameGeometry().topLeft()
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton and self._drag_pos is not None:
+            self.window().move(event.globalPos() - self._drag_pos)
+    def mouseReleaseEvent(self, event): self._drag_pos = None
+
+class FlowLayout(QLayout):
+    def __init__(self, parent=None, margin=0, h_spacing=-1, v_spacing=-1):
+        super().__init__(parent)
+        self.itemList = []
+        self.setContentsMargins(margin, margin, margin, margin)
+        self._h_spacing, self._v_spacing = h_spacing, v_spacing
+    def __del__(self):
+        item = self.takeAt(0)
+        while item: item = self.takeAt(0)
+    def addItem(self, item): self.itemList.append(item)
+    def count(self): return len(self.itemList)
+    def itemAt(self, index): return self.itemList[index] if 0 <= index < len(self.itemList) else None
+    def takeAt(self, index): return self.itemList.pop(index) if 0 <= index < len(self.itemList) else None
+    def removeWidget(self, widget):
+        for i in range(self.count()):
+            if self.itemAt(i).widget() == widget:
+                self.takeAt(i)
+                return
+    def expandingDirections(self): return Qt.Orientations(Qt.Orientation(0))
+    def hasHeightForWidth(self): return True
+    def heightForWidth(self, width):
+        m = self.contentsMargins()
+        return self.doLayout(QRect(0, 0, width - m.left() - m.right(), 0), True) + m.top() + m.bottom()
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        m = self.contentsMargins()
+        self.doLayout(rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom()), False)
+    def sizeHint(self): return self.minimumSize()
+    def minimumSize(self):
+        size = QSize()
+        for item in self.itemList: size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+    def horizontalSpacing(self): return self._h_spacing if self._h_spacing >= 0 else self.spacing()
+    def verticalSpacing(self): return self._v_spacing if self._v_spacing >= 0 else self.spacing()
+    def doLayout(self, rect, testOnly):
+        x, y, lineHeight = rect.x(), rect.y(), 0
+        spaceX, spaceY = self.horizontalSpacing(), self.verticalSpacing()
+        for item in self.itemList:
+            nextX = x + item.sizeHint().width() + spaceX
+            if nextX - spaceX > rect.right() and lineHeight > 0:
+                x, y, nextX, lineHeight = rect.x(), y + lineHeight + spaceY, rect.x() + item.sizeHint().width() + spaceX, 0
+            if not testOnly: item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
+            x, lineHeight = nextX, max(lineHeight, item.sizeHint().height())
+        return y + lineHeight - rect.y()
+
+# ---------------------------------------------------------------------------
+# БЛОК НАБЛЮДЕНИЯ
+# ---------------------------------------------------------------------------
+class BlockWidget(QFrame):
+    status_changed = pyqtSignal(str, str, str)
+    delete_requested = pyqtSignal(object)
+
+    def __init__(self, folder_path, parent=None):
+        super().__init__(parent)
+        self.folder_path = folder_path
+        self.custom_name = os.path.basename(self.folder_path.rstrip(os.sep)) or self.folder_path
+        self.last_check_time, self.last_file_time, self._watch_start = datetime.now(), None, None
+        self.next_check_time = None
+        self._running, self._start_time_qtime, self._compact, self._is_scanning = False, None, False, False
+        self.selected_columns, self.parsed_data, self.parse_error = [], {}, ""
+        self.is_parsing, self._detail_expanded, self._last_parsed_mtime = False, False, None
+        
+        self.widget_columns = list(WIDGET_MAIN_COLUMNS)
+        self._compact_collapsed = False
+
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setObjectName("block")
+        self.setStyleSheet(Styles.block_detail())
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._on_timer)
+        self.blink_timer = QTimer(self)
+        self.blink_timer.setInterval(500)
+        self.blink_timer.timeout.connect(self._toggle_blink)
+        
+        self.ui_timer = QTimer(self)
+        self.ui_timer.setInterval(3600 * 1000) # 1 час
+        self.ui_timer.timeout.connect(self._update_check_times)
+        self.ui_timer.start()
+
+        self._blink_state, self._base_color_hex = False, "#999999"
+        self._drag_start_pos=None
+
+        self._build_ui()
+        self._set_circle("gray")
+        self._update_data_label()
+        self.setAcceptDrops(False)
+        for child in self.findChildren(QWidget): child.setAcceptDrops(False)
+
+    def _build_ui(self):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self._stack = QStackedWidget(self)
+        outer.addWidget(self._stack)
+        
+        self.detail_page = QWidget()
+        self._build_detail_ui(self.detail_page)
+        self._stack.addWidget(self.detail_page)
+        
+        self.compact_page = QWidget()
+        self._build_compact_ui(self.compact_page)
+        self._stack.addWidget(self.compact_page)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton and self._drag_start_pos is not None:
+            if (event.pos() - self._drag_start_pos).manhattanLength() > QApplication.startDragDistance():
+                self._start_drag()
+        super().mouseMoveEvent(event)
+
+    def _start_drag(self):
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        mime_data.setData("application/x-blockwidget", b"")
+        drag.setMimeData(mime_data)
+        
+        pixmap = self.grab()
+        painter = QPainter(pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+        painter.fillRect(pixmap.rect(), QColor(0, 0, 0, 150))
+        painter.end()
+        
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(self._drag_start_pos)
+        
+        if hasattr(self.window(), 'blocks_container'):
+            self.window().blocks_container.dragged_block = self
+            drag.exec_(Qt.MoveAction)
+            self.window().blocks_container.dragged_block = None
+
+    def _build_detail_ui(self, parent):
+        outer = QHBoxLayout(parent)
+        outer.setContentsMargins(s(8), s(8), s(8), s(4))
+        outer.setSpacing(s(10))
+
+        self.circle = QLabel()
+        self.circle.setFixedSize(s(16), s(16))
+        set_custom_tooltip(self.circle, "Серый — остановлен\nЗелёный — файлы в норме\nКрасный — нет новых файлов")
+        self.circle_glow = QGraphicsDropShadowEffect(self)
+        self.circle_glow.setBlurRadius(s(20))
+        self.circle_glow.setOffset(0, 0)
+        self.circle.setGraphicsEffect(self.circle_glow)
+        outer.addWidget(self.circle, 0, Qt.AlignTop)
+
+        content = QWidget()
+        content.setMinimumWidth(s(400))
+        outer.addWidget(content, 1)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(s(6))
+
+        name_row = QHBoxLayout()
+        self.name_edit = QLineEdit(self.custom_name)
+        self.name_edit.setStyleSheet(Styles.name_edit())
+        self.name_edit.textChanged.connect(self._on_name_changed)
+        name_row.addWidget(self.name_edit, 1)
+        self.delete_btn = QPushButton("✕")
+        self.delete_btn.setFixedSize(s(26), s(26))
+        self.delete_btn.setStyleSheet(Styles.delete_btn())
+        self.delete_btn.clicked.connect(lambda: self.delete_requested.emit(self))
+        name_row.addWidget(self.delete_btn, 0)
+        layout.addLayout(name_row)
+
+        path_row = QHBoxLayout()
+        self.path_label = QLabel(self.folder_path)
+        self.path_label.setStyleSheet(Styles.path_label())
+        self.path_label.setWordWrap(True)
+        path_row.addWidget(self.path_label, 1)
+        self.open_btn = QPushButton()
+        self.open_btn.setIcon(self.style().standardIcon(QStyle.SP_DirOpenIcon))
+        self.open_btn.setFixedSize(s(30), s(30))
+        self.open_btn.clicked.connect(self._open_folder)
+        path_row.addWidget(self.open_btn, 0)
+        layout.addLayout(path_row)
+
+        line = QFrame()
+        line.setFixedHeight(s(1))
+        line.setStyleSheet(Styles.separator())
+        layout.addWidget(line)
+
+        settings_layout = QVBoxLayout()
+        settings_layout.setSpacing(s(4))
+
+        row_period = QHBoxLayout()
+        lbl_p = QLabel("Период, мин:")
+        lbl_p.setStyleSheet(Styles.label_input())
+        row_period.addWidget(lbl_p)
+        self.period_spin = QSpinBox()
+        self.period_spin.setStyleSheet(Styles.input_field())
+        self.period_spin.setRange(1, 24 * 60)
+        self.period_spin.setValue(5)
+        self.period_spin.setFixedWidth(s(70))
+        self.period_spin.valueChanged.connect(self._update_alert_info)
+        row_period.addWidget(self.period_spin)
+        row_period.addSpacing(10)
+        
+        lbl_mult = QLabel("Множ:")
+        lbl_mult.setStyleSheet(Styles.label_input())
+        row_period.addWidget(lbl_mult)
+        self.multiplier_spin = QDoubleSpinBox()
+        self.multiplier_spin.setStyleSheet(Styles.input_field())
+        self.multiplier_spin.setRange(1.1, 10.0)
+        self.multiplier_spin.setSingleStep(0.1)
+        self.multiplier_spin.setValue(1.5)
+        self.multiplier_spin.setFixedWidth(s(70))
+        self.multiplier_spin.valueChanged.connect(self._update_alert_info)
+        row_period.addWidget(self.multiplier_spin)
+        
+        self.use_period_alert_cb = QCheckBox("По периоду")
+        self.use_period_alert_cb.setStyleSheet(Styles.label_input())
+        self.use_period_alert_cb.toggled.connect(self._update_alert_info)
+        row_period.addWidget(self.use_period_alert_cb)
+        row_period.addStretch()
+        settings_layout.addLayout(row_period)
+
+        row_time = QHBoxLayout()
+        self.use_exact_start_cb = QCheckBox("Точное время:")
+        self.use_exact_start_cb.setStyleSheet(Styles.label_input())
+        self.use_exact_start_cb.toggled.connect(self._on_exact_start_toggled)
+        row_time.addWidget(self.use_exact_start_cb)
+        self.start_time_edit = QTimeEdit()
+        self.start_time_edit.setStyleSheet(Styles.input_field())
+        self.start_time_edit.setDisplayFormat("HH:mm")
+        now_t = QTime.currentTime()
+        self.start_time_edit.setTime(QTime(now_t.hour(), now_t.minute(), 0))
+        self.start_time_edit.setFixedWidth(s(70))
+        self.start_time_edit.setEnabled(False)
+        row_time.addWidget(self.start_time_edit)
+        row_time.addSpacing(10)
+        
+        lbl_cap = QLabel("Старт (> мин):")
+        lbl_cap.setStyleSheet(Styles.label_input())
+        row_time.addWidget(lbl_cap)
+        self.start_timeout_spin = QSpinBox()
+        self.start_timeout_spin.setStyleSheet(Styles.input_field())
+        self.start_timeout_spin.setRange(1, 24 * 60)
+        self.start_timeout_spin.setValue(30)
+        self.start_timeout_spin.setFixedWidth(s(70))
+        self.start_timeout_spin.valueChanged.connect(self._update_alert_info)
+        row_time.addWidget(self.start_timeout_spin)
+        row_time.addStretch()
+        settings_layout.addLayout(row_time)
+
+        row_mode = QHBoxLayout()
+        lbl_m = QLabel("Режим:")
+        lbl_m.setStyleSheet(Styles.label_input())
+        row_mode.addWidget(lbl_m)
+        self.indicator_mode_combo = QComboBox()
+        self.indicator_mode_combo.setStyleSheet(Styles.input_field())
+        self.indicator_mode_combo.addItems(["Статика", "Мигание"])
+        self.indicator_mode_combo.currentTextChanged.connect(self._on_indicator_mode_changed)
+        row_mode.addWidget(self.indicator_mode_combo)
+        row_mode.addStretch()
+        settings_layout.addLayout(row_mode)
+        layout.addLayout(settings_layout)
+
+        btn_status_row = QHBoxLayout()
+        self.start_btn = QPushButton("Запуск")
+        self.start_btn.setStyleSheet(Styles.btn_action())
+        self.start_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.start_btn.clicked.connect(self.start)
+        self.stop_btn = QPushButton("Стоп")
+        self.stop_btn.setStyleSheet(Styles.btn_action())
+        self.stop_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self.stop)
+        btn_status_row.addWidget(self.start_btn, 2)
+        btn_status_row.addWidget(self.stop_btn, 1)
+        
+        self.status_label = QLabel("Остановлен")
+        self.status_label.setStyleSheet(Styles.status_stopped())
+        btn_status_row.addWidget(self.status_label)
+        layout.addLayout(btn_status_row)
+
+        self.last_file_label = QLabel("Последний файл: —")
+        self.last_file_label.setStyleSheet(Styles.info_text())
+        layout.addWidget(self.last_file_label)
+
+        self.check_time_label = QLabel("Проверка: —")
+        self.check_time_label.setWordWrap(True)
+        self.check_time_label.setStyleSheet(Styles.info_text())
+        layout.addWidget(self.check_time_label)
+
+        self.alert_info = QLabel()
+        self.alert_info.setStyleSheet(Styles.alert_text())
+        self.alert_info.setWordWrap(True)
+        layout.addWidget(self.alert_info)
+        self._update_alert_info()
+
+        self.detail_toggle_btn = QPushButton("▼ Показать данные")
+        self.detail_toggle_btn.setStyleSheet(Styles.btn_action())
+        self.detail_toggle_btn.clicked.connect(self._toggle_detail_data)
+        layout.addWidget(self.detail_toggle_btn)
+
+        self.detail_data_widget = QWidget()
+        self.detail_data_widget.setVisible(False)
+        dd_layout = QVBoxLayout(self.detail_data_widget)
+        dd_layout.setContentsMargins(0, s(4), 0, 0)
+        dd_layout.setSpacing(s(6))
+
+        self.btn_select_cols = QPushButton("Выбрать столбцы")
+        self.btn_select_cols.setStyleSheet(Styles.btn_action())
+        self.btn_select_cols.clicked.connect(self._open_column_selector)
+        dd_layout.addWidget(self.btn_select_cols)
+
+        self.detail_scroll = QScrollArea()
+        self.detail_scroll.setWidgetResizable(True)
+        self.detail_scroll.setFrameShape(QFrame.NoFrame)
+        self.detail_scroll.setStyleSheet(f"QScrollArea {{ background: white; border: 1px solid #ddd; border-radius: {s(6)}px; }}")
+        self.detail_data_label = QLabel("Нет данных")
+        self.detail_data_label.setWordWrap(True)
+        self.detail_data_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.detail_data_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.MinimumExpanding)
+        self.detail_data_label.setStyleSheet(f"font-size: {s(FONT_TEXT)}px; color: #222; padding: {s(6)}px; background: transparent; border: none;")
+        self.detail_scroll.setWidget(self.detail_data_label)
+        
+        fm = QFontMetrics(QFont("", s(FONT_TEXT)))
+        self.detail_scroll.setFixedHeight((fm.lineSpacing() * 20) + s(16))
+
+        dd_layout.addWidget(self.detail_scroll)
+        layout.addWidget(self.detail_data_widget)
+
+    def _build_compact_ui(self, parent):
+        self.compact_layout = QVBoxLayout(parent)
+        self.compact_layout.setContentsMargins(0, 0, 0, 0)
+        self.compact_layout.setSpacing(0)
+
+        self.compact_indicator = QFrame()
+        self.compact_indicator.setFixedHeight(s(20))
+        self.compact_indicator.setStyleSheet(Styles.indicator_strip("#999999", 13))
+        self.indicator_glow = QGraphicsDropShadowEffect(self)
+        self.indicator_glow.setBlurRadius(s(16))
+        self.indicator_glow.setOffset(0, 0)
+        self.compact_indicator.setGraphicsEffect(self.indicator_glow)
+        self.compact_layout.addWidget(self.compact_indicator, 0)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(s(8), s(8), s(8), s(8))
+        content_layout.setSpacing(s(8))
+
+        # Header with Name and Collapse button
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.compact_name = ClickableLabel(self.custom_name)
+        self.compact_name.setAlignment(Qt.AlignCenter)
+        self.compact_name.setWordWrap(True)
+        self.compact_name.setFixedHeight(s(36))
+        self.compact_name.setStyleSheet(Styles.compact_name())
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(s(8))
+        shadow.setColor(QColor(0, 0, 0, 60))
+        shadow.setOffset(0, 2)
+        self.compact_name.setGraphicsEffect(shadow)
+        set_custom_tooltip(self.compact_name, self.folder_path)
+        self.compact_name.clicked.connect(self._open_folder)
+        
+        header_layout.addWidget(self.compact_name, 1)
+        
+        self.collapse_btn = QPushButton("▲")
+        self.collapse_btn.setFixedSize(s(24), s(24))
+        self.collapse_btn.setStyleSheet("QPushButton { border: none; background: transparent; font-size: 16px; font-weight: bold; color: #555; } QPushButton:hover { color: #3498db; }")
+        self.collapse_btn.clicked.connect(self._toggle_compact_collapse)
+        header_layout.addWidget(self.collapse_btn, 0)
+        
+        content_layout.addLayout(header_layout)
+
+        # Check time label under header
+        self.compact_check_time_label = QLabel("Проверка: —")
+        self.compact_check_time_label.setAlignment(Qt.AlignCenter)
+        self.compact_check_time_label.setWordWrap(True)
+        self.compact_check_time_label.setStyleSheet(f"font-size: {s(12)}px; color: #666; background: transparent; border: none;")
+        content_layout.addWidget(self.compact_check_time_label)
+
+        # Grid container
+        self.compact_grid_container = QWidget()
+        self.compact_grid_layout = QGridLayout(self.compact_grid_container)
+        self.compact_grid_layout.setHorizontalSpacing(s(8))
+        self.compact_grid_layout.setVerticalSpacing(s(8))
+        self.compact_grid_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.addWidget(self.compact_grid_container, 1)
+
+        self.compact_layout.addWidget(content, 1)
+        self._rebuild_compact_grid()
+
+    def _toggle_compact_collapse(self):
+        self._compact_collapsed = not self._compact_collapsed
+        self.compact_grid_container.setVisible(not self._compact_collapsed)
+        self.collapse_btn.setText("▼" if self._compact_collapsed else "▲")
+        self._update_block_height()
+
+    def _rebuild_compact_grid(self):
+        for i in reversed(range(self.compact_grid_layout.count())): 
+            self.compact_grid_layout.itemAt(i).widget().setParent(None)
+            
+        self.compact_value_labels, self.compact_indicators = {}, {}
+
+        for i, (col_key, display_name) in enumerate(self.widget_columns):
+            cell = ClickableFrame(col_key)
+            cell.setObjectName("compactCell")
+            cell.setStyleSheet(Styles.compact_cell_bg())
+            cell.clicked.connect(self._copy_param_value)
+            
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(s(6), s(4), s(6), s(4))
+            cell_layout.setSpacing(s(2))
+
+            top_row = QHBoxLayout()
+            top_row.setSpacing(s(4))
+            
+            name_lbl = QLabel(display_name)
+            name_lbl.setStyleSheet(Styles.compact_cell_name())
+            set_custom_tooltip(name_lbl, col_key)
+            top_row.addWidget(name_lbl, 1)
+            
+            ind_lbl = QFrame()
+            ind_lbl.setFixedSize(s(4), s(24))
+            ind_lbl.setStyleSheet(Styles.param_indicator("transparent"))
+            top_row.addWidget(ind_lbl, 0, Qt.AlignRight | Qt.AlignVCenter)
+            
+            cell_layout.addLayout(top_row)
+
+            val_lbl = QLabel("—")
+            val_lbl.setAlignment(Qt.AlignCenter)
+            val_lbl.setStyleSheet(Styles.compact_cell_value())
+            cell_layout.addWidget(val_lbl)
+
+            self.compact_grid_layout.addWidget(cell, i // 2, i % 2)
+            self.compact_value_labels[col_key] = val_lbl
+            self.compact_indicators[col_key] = ind_lbl
+            
+        self._update_data_label()
+        self._update_block_height()
+
+    def _update_block_height(self):
+        if getattr(self, '_compact_collapsed', False):
+            new_height = s(125)
+        else:
+            rows = (len(self.widget_columns) + 1) // 2
+            base_h = s(135)
+            row_h = s(70)
+            new_height = max(s(160), base_h + rows * row_h)
+        
+        if self._compact:
+            self.setFixedSize(s(WIDGET_BLOCK_WIDTH), new_height)
+
+    def _add_widget_parameter(self):
+        current_keys = [c[0] for c in self.widget_columns]
+        dlg = ColumnSelectDialog(ALL_COLUMNS, current_keys, self)
+        dlg.setWindowTitle("Настройка параметров виджета")
+        
+        if dlg.exec_():
+            selected_keys = dlg.get_selected()
+            default_display_names = dict(WIDGET_MAIN_COLUMNS)
+            self.widget_columns = [(k, default_display_names.get(k, k)) for k in selected_keys]
+            self._rebuild_compact_grid()
+            self._last_parsed_mtime = None 
+            self.fetch_file_data(force=True)
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        menu.setStyleSheet(Styles.menu())
+        add_action = menu.addAction("Настроить параметры виджета")
+        add_action.triggered.connect(self._add_widget_parameter)
+        menu.exec_(event.globalPos())
+
+    def _toggle_detail_data(self):
+        self._detail_expanded = not self._detail_expanded
+        self.detail_data_widget.setVisible(self._detail_expanded)
+        self.detail_toggle_btn.setText("▲ Скрыть данные" if self._detail_expanded else "▼ Показать данные")
+        self.updateGeometry()
+        if self._detail_expanded and not self.parsed_data and not self.is_parsing:
+            self.fetch_file_data()
+
+    def _get_fetch_columns(self):
+        return list(set(self.selected_columns) | {col[0] for col in self.widget_columns})
+
+    def _get_latest_txt_mtime(self):
+        try:
+            with os.scandir(self.folder_path) as it:
+                return max((e.stat().st_mtime for e in it if e.is_file() and e.name.endswith('.txt')), default=None)
+        except OSError: return None
+
+    def fetch_file_data(self, force=False):
+        if self.is_parsing: return
+        if not force and self.parsed_data and (cur := self._get_latest_txt_mtime()) is not None and cur == self._last_parsed_mtime: return
+        
+        self.is_parsing = True
+        self._update_data_label()
+        worker = FileParseWorker(self.folder_path, self._get_fetch_columns())
+        worker.signals.data_parsed.connect(self._on_file_data_parsed)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_file_data_parsed(self, data, error, mtime):
+        self.is_parsing, self.parsed_data, self.parse_error = False, data, error
+        if not error and mtime is not None: self._last_parsed_mtime = mtime
+        self._update_data_label()
+
+    def _update_data_label(self):
+        if self.is_parsing and not self.parsed_data: text = "Чтение файла..."
+        elif self.parse_error: text = f"Ошибка: {self.parse_error}"
+        elif not self.parsed_data: text = "Нет данных"
+        else: text = "<br>".join(f"<b>{col}</b>: {self.parsed_data[col]}" for col in self.selected_columns if col in self.parsed_data) or "Нет данных"
+        
+        if hasattr(self, "detail_data_label"): self.detail_data_label.setText(text)
+
+        if hasattr(self, "compact_value_labels"):
+            for col_key, label in self.compact_value_labels.items():
+                ind = self.compact_indicators.get(col_key)
+                if self.is_parsing and not self.parsed_data:
+                    label.setText("…")
+                    if ind: ind.setStyleSheet(Styles.param_indicator("transparent"))
+                elif self.parse_error:
+                    label.setText("err")
+                    if ind: ind.setStyleSheet(Styles.param_indicator("#e74c3c"))
+                elif col_key in self.parsed_data:
+                    val_str = str(self.parsed_data[col_key])
+                    label.setText(val_str)
+                    if ind:
+                        if col_key in PARAM_RANGES:
+                            try:
+                                vmin, vmax = PARAM_RANGES[col_key]
+                                ind.setStyleSheet(Styles.param_indicator("#e74c3c" if not (vmin <= float(val_str) <= vmax) else "#2ecc71"))
+                            except ValueError: ind.setStyleSheet(Styles.param_indicator("transparent"))
+                        else: ind.setStyleSheet(Styles.param_indicator("transparent"))
+                else:
+                    label.setText("—")
+                    if ind: ind.setStyleSheet(Styles.param_indicator("transparent"))
+
+    def _open_column_selector(self):
+        dlg = ColumnSelectDialog(ALL_COLUMNS, self.selected_columns, self)
+        if dlg.exec_():
+            self.selected_columns = dlg.get_selected()
+            self._last_parsed_mtime = None
+            self.fetch_file_data(force=True)
+
+    def _on_name_changed(self, text):
+        if text.strip():
+            self.custom_name = text
+            self.compact_name.setText(text)
+
+    def _on_indicator_mode_changed(self, text): self._update_blink_state()
+    def _toggle_blink(self):
+        self._blink_state = not self._blink_state
+        self._apply_indicator_color()
+
+    def _update_blink_state(self):
+        if self._base_color_hex == "#e74c3c" and self.indicator_mode_combo.currentText() == "Мигание":
+            if not self.blink_timer.isActive(): self.blink_timer.start()
+        else:
+            self.blink_timer.stop()
+            self._blink_state = False
+        self._apply_indicator_color()
+
+    def set_compact(self, compact):
+        self._compact = compact
+        self._stack.setCurrentIndex(1 if compact else 0)
+        if compact:
+            self.setStyleSheet(Styles.block_compact())
+            self._update_block_height()
+        else:
+            self.setMinimumSize(0, 0)
+            self.setMaximumSize(16777215, 16777215)
+            self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+            self.setStyleSheet(Styles.block_detail())
+        self.unsetCursor()
+
+    def _open_folder(self): QDesktopServices.openUrl(QUrl.fromLocalFile(self.folder_path))
+
+    def _copy_param_value(self, col_key):
+        QApplication.clipboard().setText(f"{col_key}: {self.parsed_data.get(col_key, '—')}")
+
+    def _update_alert_info(self):
+        if self.use_period_alert_cb.isChecked():
+            p, mult = self.period_spin.value(), self.multiplier_spin.value()
+            self.alert_info.setText("Тревога > %.1f мин (%.1f × период)." % (p * mult, mult))
+        else:
+            self.alert_info.setText("Тревога > %d мин с момента прихода последнего файла." % self.start_timeout_spin.value())
+
+    def _on_exact_start_toggled(self, checked): self.start_time_edit.setEnabled(checked and not self._running)
+    def _set_circle(self, color):
+        self._base_color_hex = {"gray": "#999999", "green": "#2ecc71", "red": "#e74c3c"}.get(color, color)
+        self._update_blink_state()
+
+    def _apply_indicator_color(self):
+        c = QColor(self._base_color_hex)
+        alpha = 60 if (self.blink_timer.isActive() and self._blink_state) else 255
+        color_style = f"rgba({c.red()}, {c.green()}, {c.blue()}, {alpha})"
+        glow_c = QColor(c)
+        glow_c.setAlpha(int(alpha * 0.8))
+        if hasattr(self, "circle"):
+            self.circle.setStyleSheet(Styles.indicator(color_style, 8))
+            self.circle_glow.setColor(glow_c)
+        if hasattr(self, "compact_indicator"):
+            self.compact_indicator.setStyleSheet(Styles.indicator_strip(color_style, 13))
+            self.indicator_glow.setColor(glow_c)
+
+    def _update_last_file_label(self):
+        if self.last_file_time is not None: text = "Последний файл: " + self.last_file_time.strftime("%Y-%m-%d %H:%M:%S")
+        elif self._watch_start is not None: text = "Последний файл: — (в папке нет файлов)"
+        else: text = "Последний файл: —"
+        self.last_file_label.setText(text)
+        
+        if hasattr(self.compact_indicator, '_custom_tooltip_filter'):
+            self.compact_indicator._custom_tooltip_filter.setText(text)
+        else:
+            set_custom_tooltip(self.compact_indicator, text)
+
+    def _update_check_times(self):
+        if not self._running:
+            text = "Проверка: остановлен"
+        else:
+            last_str = self.last_check_time.strftime("%H:%M:%S")
+            next_str = self.next_check_time.strftime("%H:%M:%S") if self.next_check_time else "—"
+
+            no_file_str = ""
+            ref_time = self.last_file_time or self._watch_start
+            if ref_time:
+                delta_sec = max(0, int((datetime.now() - ref_time).total_seconds()))
+                threshold = (self.period_spin.value() * self.multiplier_spin.value()) if self.use_period_alert_cb.isChecked() else self.start_timeout_spin.value()
+                
+                if (delta_sec / 60.0) > threshold:
+                    days = delta_sec // 86400
+                    hours = (delta_sec % 86400) // 3600
+                    minutes = (delta_sec % 3600) // 60
+                    
+                    if days > 0:
+                        no_file_str = f"Нет: {days} д {hours} ч"
+                    elif hours > 0:
+                        no_file_str = f"Нет: {hours} ч {minutes} мин"
+                    else:
+                        no_file_str = f"Нет: {minutes} мин"
+
+            text = f"Посл: {last_str} | След: {next_str}"
+            if no_file_str:
+                text += f"\n{no_file_str}"
+
+        if hasattr(self, "check_time_label"):
+            self.check_time_label.setText(text)
+        if hasattr(self, "compact_check_time_label"):
+            self.compact_check_time_label.setText(text)
+
+    def start(self):
+        if self._running: return
+        self._watch_start = datetime.now()
+        self._start_time_qtime = self.start_time_edit.time() if self.use_exact_start_cb.isChecked() else None
+        self._running = True
+        self.last_check_time = datetime.now()
+        self._update_check_times()
+        
+        for w in (self.start_btn, self.period_spin, self.multiplier_spin, self.use_period_alert_cb, self.start_timeout_spin, self.use_exact_start_cb, self.start_time_edit): w.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.status_label.setText("Работает")
+        self.status_label.setStyleSheet(Styles.status_running())
+        
+        self.check_files(initial=True)
+        self._schedule_next_check()
+        self.fetch_file_data(force=True)
+
+    def stop(self):
+        if not self._running: return
+        self._running = False
+        self.next_check_time = None
+        self.timer.stop()
+        self._update_check_times()
+        
+        for w in (self.start_btn, self.period_spin, self.multiplier_spin, self.use_period_alert_cb, self.start_timeout_spin, self.use_exact_start_cb): w.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.start_time_edit.setEnabled(self.use_exact_start_cb.isChecked())
+        self.status_label.setText("Остановлен")
+        self.status_label.setStyleSheet(Styles.status_stopped())
+        self._set_circle("gray")
+
+    def is_running(self): return self._running
+
+    def _schedule_next_check(self):
+        now = datetime.now()
+        if self._start_time_qtime is not None:
+            next_tick = self._compute_next_tick(now)
+            delay_ms = max(int((next_tick - now).total_seconds() * 1000), 100)
+        else: delay_ms = self.period_spin.value() * 60 * 1000
+        
+        self.next_check_time = now + timedelta(milliseconds=delay_ms)
+        self.timer.setSingleShot(True)
+        self.timer.start(delay_ms)
+        self._update_check_times()
+
+    def _compute_next_tick(self, now):
+        period_sec = self.period_spin.value() * 60
+        base = now.replace(hour=self._start_time_qtime.hour(), minute=self._start_time_qtime.minute(), second=self._start_time_qtime.second(), microsecond=0)
+        if base > now: base -= timedelta(days=1)
+        return base + timedelta(seconds=(int((now - base).total_seconds() // period_sec) + 1) * period_sec)
+
+    def _on_timer(self):
+        if self._running:
+            self.check_files(initial=False)
+            self._schedule_next_check()
+
+    def check_files(self, initial=False):
+        if self._is_scanning: return
+        self._is_scanning = True
+        worker = ScanWorker(self.folder_path, self.last_check_time, initial)
+        worker.signals.finished.connect(self._on_scan_finished)
+        worker.signals.error.connect(self._on_scan_error)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_scan_error(self, err_msg, scan_time):
+        self._is_scanning = False
+        self.status_changed.emit(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), self.custom_name, f"Ошибка: {err_msg}")
+        self._set_circle("red")
+
+    def _on_scan_finished(self, found, initial, scan_time, max_file_time):
+        self._is_scanning = False
+        self.last_check_time = scan_time
+        
+        if max_file_time: self.last_file_time = max_file_time
+        self._update_last_file_label()
+        
+        if not self._running: 
+            self._update_check_times()
+            return
+
+        if found:
+            self.status_changed.emit(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), self.custom_name, ("Файлы найдены (%d)" if initial else "Файлы пришли (%d)") % len(found))
+            if not initial: self.fetch_file_data()
+        else:
+            self.status_changed.emit(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), self.custom_name, "Файлов нет")
+
+        self._update_indicator(datetime.now(), initial=initial)
+        self._update_check_times()
+
+    def _update_indicator(self, now=None, initial=False):
+        if not self._running:
+            self._set_circle("gray")
+            return
+        now = now or datetime.now()
+        
+        if self.last_file_time is None:
+            self._set_circle("red")
+            return
+            
+        ref_time = self.last_file_time
+        threshold = (self.period_spin.value() * self.multiplier_spin.value()) if self.use_period_alert_cb.isChecked() else self.start_timeout_spin.value()
+        self._set_circle("red" if (now - ref_time).total_seconds() / 60.0 > threshold else "green")
+
+# ---------------------------------------------------------------------------
+# ОВЕРЛЕЙ ПОДСВЕТКИ ЗОНЫ ВСТАВКИ
+# ---------------------------------------------------------------------------
+class DropOverlay(QWidget):
+    """Прозрачный оверлей, рисует подсвеченную зону вставки при drag & drop блока."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)  # drag-события проходят сквозь
+        self.setAttribute(Qt.WA_NoSystemBackground)         # не заливать фон под блоки
+        self._rect = QRect()
+
+    def set_rect(self, rect):
+        rect = QRect(rect)
+        if rect != self._rect:
+            self._rect = rect
+            self.update()
+
+    def clear(self):
+        if not self._rect.isNull():
+            self._rect = QRect()
+            self.update()
+
+    def paintEvent(self, event):
+        if self._rect.isNull() or self._rect.isEmpty():
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setBrush(QColor(52, 152, 219, 60))                   # полупрозрачная заливка
+        painter.setPen(QPen(QColor(52, 152, 219), max(2, s(2)), Qt.DashLine))
+        painter.drawRoundedRect(self._rect.adjusted(1, 1, -1, -1), s(8), s(8))
+
+# ---------------------------------------------------------------------------
+# КОНТЕЙНЕР БЛОКОВ
+# ---------------------------------------------------------------------------
+class BlocksContainer(QWidget):
+    block_added = pyqtSignal(object)
+    block_removed = pyqtSignal(object)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        
+        self.stack = QStackedWidget(self)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        main_layout.addWidget(self.stack)
+
+        self.normal_page = QWidget()
+        self.normal_layout = QVBoxLayout(self.normal_page)
+        self.normal_layout.setAlignment(Qt.AlignTop)
+        self.normal_layout.setSpacing(s(8))
+        self.normal_layout.setContentsMargins(s(8), s(8), s(8), s(8))
+        self.stack.addWidget(self.normal_page)
+
+        self.compact_page = QWidget()
+        self.compact_page.setContentsMargins(0, 0, 0, 0)
+        self.compact_layout = FlowLayout(self.compact_page, margin=s(16), h_spacing=s(24), v_spacing=s(24))
+        self.stack.addWidget(self.compact_page)
+
+        self.blocks, self._compact = [], False
+        self.dragged_block = None
+        self.hint = QLabel("Перетащите папки сюда,\nчтобы создать блоки наблюдения")
+        self.hint.setAlignment(Qt.AlignCenter)
+        self.hint.setStyleSheet(Styles.hint())
+        self.hint.setAcceptDrops(False)
+        self.hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.normal_layout.addWidget(self.hint)
+        self.normal_layout.addStretch()
+
+        # Оверлей для отрисовки подсвеченной зоны вставки
+        self.drop_overlay = DropOverlay(self)
+        self.drop_overlay.setGeometry(self.rect())
+        self.drop_overlay.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "drop_overlay"):
+            self.drop_overlay.setGeometry(self.rect())
+            self.drop_overlay.raise_()
+        if self._compact: self.compact_layout.invalidate()
+
+    def set_compact(self, compact):
+        self._compact = compact
+        self.stack.setCurrentIndex(1 if compact else 0)
+        if compact:
+            for b in self.blocks:
+                self.normal_layout.removeWidget(b)
+                self.compact_layout.addWidget(b)
+            if not self.blocks:
+                self.normal_layout.removeWidget(self.hint)
+                self.compact_layout.addWidget(self.hint)
+            self.hint.setText("📁 →")
+            self.hint.setStyleSheet(Styles.hint_compact())
+        else:
+            for b in self.blocks:
+                self.compact_layout.removeWidget(b)
+                self.normal_layout.insertWidget(self.normal_layout.count() - 1, b, 0, Qt.AlignTop)
+            if not self.blocks:
+                self.compact_layout.removeWidget(self.hint)
+                self.normal_layout.insertWidget(self.normal_layout.count() - 1, self.hint)
+            self.hint.setText("Перетащите папки сюда,\nчтобы создать блоки наблюдения")
+            self.hint.setStyleSheet(Styles.hint())
+        self.compact_page.updateGeometry()
+        self.normal_page.updateGeometry()
+        if hasattr(self, "drop_overlay"):
+            self.drop_overlay.raise_()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-blockwidget"):
+            event.acceptProposedAction()
+
+    def _get_drop_index(self, pos):
+        """Вычисляет индекс для вставки блока"""
+        drop_idx = len(self.blocks)
+        if not self._compact:
+            for i, b in enumerate(self.blocks):
+                b_rect = QRect(b.mapTo(self, QPoint(0, 0)), b.size())
+                if pos.y() < b_rect.center().y():
+                    drop_idx = i
+                    break
+        else:
+            for i, b in enumerate(self.blocks):
+                b_rect = QRect(b.mapTo(self, QPoint(0, 0)), b.size())
+                if pos.y() < b_rect.top():
+                    drop_idx = i
+                    break
+                elif pos.y() <= b_rect.bottom():
+                    if pos.x() < b_rect.center().x():
+                        drop_idx = i
+                        break
+                    else:
+                        drop_idx = i + 1
+        return drop_idx
+
+    def _compute_drop_rect(self, drop_idx):
+        if not self.blocks:
+            return QRect()
+        if not self._compact:
+            return self._compute_normal_drop_rect(drop_idx)
+        return self._compute_compact_drop_rect(drop_idx)
+
+    def _compute_normal_drop_rect(self, drop_idx):
+        """Зона вставки для вертикального списка (основное окно)."""
+        top_margin, bottom_margin = s(8), s(8)
+        min_h = s(44)
+
+        if drop_idx <= 0:
+            b_top = self.blocks[0].mapTo(self, QPoint(0, 0)).y()
+            gap_top, gap_bottom = top_margin, b_top
+        elif drop_idx >= len(self.blocks):
+            last = self.blocks[-1]
+            b_bottom = last.mapTo(self, QPoint(0, last.height())).y()
+            gap_top, gap_bottom = b_bottom, self.height() - bottom_margin
+        else:
+            prev_b = self.blocks[drop_idx - 1]
+            next_b = self.blocks[drop_idx]
+            gap_top = prev_b.mapTo(self, QPoint(0, prev_b.height())).y()
+            gap_bottom = next_b.mapTo(self, QPoint(0, 0)).y()
+
+        if gap_bottom - gap_top < min_h:
+            center_y = (gap_top + gap_bottom) / 2.0
+            gap_top = int(center_y - min_h / 2.0)
+            gap_bottom = gap_top + min_h
+
+        gap_top = max(gap_top, top_margin)
+        gap_bottom = min(gap_bottom, self.height() - bottom_margin)
+        if gap_bottom <= gap_top:
+            return QRect()
+        return QRect(s(8), gap_top, max(self.width() - s(16), 0), gap_bottom - gap_top)
+
+    def _compute_compact_drop_rect(self, drop_idx):
+        """Зона вставки для сетки (режим виджета)."""
+        def br(b):
+            return QRect(b.mapTo(self, QPoint(0, 0)), b.size())
+
+        pad = s(10)
+        edge_overlap = s(4)
+
+        if drop_idx <= 0:
+            r = br(self.blocks[0])
+            left = max(r.x() - pad, s(4))
+            return QRect(left, r.top(), (r.x() + edge_overlap) - left, r.height())
+        elif drop_idx >= len(self.blocks):
+            r = br(self.blocks[-1])
+            right_end = min(r.x() + r.width() + pad, self.width() - s(4))
+            start_x = r.x() + r.width() - edge_overlap
+            return QRect(start_x, r.top(), right_end - start_x, r.height())
+        else:
+            prev_r = br(self.blocks[drop_idx - 1])
+            next_r = br(self.blocks[drop_idx])
+            same_row = abs(prev_r.top() - next_r.top()) < s(10)
+            if same_row:
+                x = (prev_r.x() + prev_r.width() + next_r.x()) // 2
+                return QRect(x - pad, prev_r.top(), pad * 2, prev_r.height())
+            else:
+                y = (prev_r.y() + prev_r.height() + next_r.y()) // 2
+                return QRect(next_r.x(), y - pad, next_r.width(), pad * 2)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat("application/x-blockwidget"):
+            drop_idx = self._get_drop_index(event.pos())
+            self.drop_overlay.set_rect(self._compute_drop_rect(drop_idx))
+            self.drop_overlay.raise_()
+            event.acceptProposedAction()
+        elif event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event):
+        self.drop_overlay.clear()
+        event.accept()
+
+    def dropEvent(self, event):
+        self.drop_overlay.clear()
+
+        if event.mimeData().hasFormat("application/x-blockwidget"):
+            source_block = self.dragged_block
+            if not source_block:
+                return
+
+            drop_idx = self._get_drop_index(event.pos())
+            old_idx = self.blocks.index(source_block)
+
+            if drop_idx > old_idx:
+                drop_idx -= 1
+
+            if drop_idx != old_idx:
+                self.blocks.pop(old_idx)
+                self.blocks.insert(drop_idx, source_block)
+                self._refresh_layout()
+
+            event.acceptProposedAction()
+            return
+
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            for url in event.mimeData().urls():
+                path = url.toLocalFile()
+                if os.path.isdir(path) and not any(b.folder_path == path for b in self.blocks):
+                    self.add_block(path)
+
+    def _refresh_layout(self):
+        """Перестраивает интерфейс после изменения порядка блоков"""
+        for b in self.blocks:
+            if self._compact: self.compact_layout.removeWidget(b)
+            else: self.normal_layout.removeWidget(b)
+        
+        for b in self.blocks:
+            if self._compact: self.compact_layout.addWidget(b)
+            else: self.normal_layout.insertWidget(self.normal_layout.count() - 1, b, 0, Qt.AlignTop)
+        
+        self.compact_page.updateGeometry()
+        self.normal_page.updateGeometry()
+        
+        if self._compact:
+            self.compact_layout.invalidate()
+            self.compact_layout.activate()
+            self.compact_page.update()
+        
+        if hasattr(self, "drop_overlay"):
+            self.drop_overlay.raise_()
+
+    def add_block(self, path):
+        self.hint.hide()
+        block = BlockWidget(path)
+        block.delete_requested.connect(self.remove_block)
+        self.blocks.append(block)
+        if self._compact: self.compact_layout.addWidget(block)
+        else: self.normal_layout.insertWidget(self.normal_layout.count() - 1, block, 0, Qt.AlignTop)
+        self.block_added.emit(block)
+        return block
+
+    def remove_block(self, block):
+        if block.is_running(): block.stop()
+        block.deleteLater()
+        if block in self.blocks: self.blocks.remove(block)
+        if self._compact: self.compact_layout.removeWidget(block)
+        else: self.normal_layout.removeWidget(block)
+        if not self.blocks: self.hint.show()
+        self.block_removed.emit(block)
+
+# ---------------------------------------------------------------------------
+# ДИАЛОГ ЖУРНАЛА
+# ---------------------------------------------------------------------------
+class JournalDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Журнал блоков")
+        self.resize(s(800), s(500))
+        self.setStyleSheet(Styles.dialog_style())
+        layout = QVBoxLayout(self)
+        
+        self.clear_btn = QPushButton("Очистить журнал")
+        self.clear_btn.setStyleSheet(Styles.clear_btn())
+        self.clear_btn.clicked.connect(lambda: self.table.setRowCount(0))
+        layout.addWidget(self.clear_btn, 0, Qt.AlignLeft)
+
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Время проверки", "Блок", "Статус"])
+        self.table.setStyleSheet(Styles.table())
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        layout.addWidget(self.table)
+
+    def add_entry(self, time_str, block_name, status):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.setItem(row, 0, QTableWidgetItem(time_str))
+        self.table.setItem(row, 1, QTableWidgetItem(block_name))
+        item = QTableWidgetItem(status)
+        low = status.lower()
+        item.setForeground(QColor("green" if ("пришли" in low or "найдены" in low) else "red" if "ошибка" in low else "gray"))
+        self.table.setItem(row, 2, item)
+        self.table.scrollToBottom()
+
+# ---------------------------------------------------------------------------
+# ГЛАВНОЕ ОКНО
+# ---------------------------------------------------------------------------
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Наблюдение за файлами")
+        self.resize(s(1000), s(800))
+        self.setMinimumSize(s(800), s(600))
+        
+        self.settings = QSettings("FileWatcher", "FileDateWatcher")
+        self.journal = JournalDialog(self)
+        self._tray_msg_shown, self._widget_mode, self._normal_geometry_bytes, self._normal_flags, self._saved_widget_pos = False, False, None, None, None
+
+        self._build_ui()
+        self._build_tray()
+        self._restore_window_state()
+
+        self.daily_timer = QTimer(self)
+        self.daily_timer.setInterval(60000)
+        self.daily_timer.timeout.connect(self._check_daily_update)
+        self.daily_timer.start()
+        self._last_update_day = datetime.now().day
+
+    def _check_daily_update(self):
+        now = datetime.now()
+        if now.hour == 8 and now.minute == 0 and self._last_update_day != now.day:
+            self._last_update_day = now.day
+            self._refresh_all_data()
+
+    def _refresh_all_data(self):
+        for block in self.blocks_container.blocks: block.fetch_file_data(force=True)
+
+    def _build_ui(self):
+        self.central_widget = QWidget()
+        self.central_widget.setObjectName("centralWidget")
+        self.central_widget.setAttribute(Qt.WA_StyledBackground, True)
+        self.setCentralWidget(self.central_widget)
+        
+        main_layout = QVBoxLayout(self.central_widget)
+        main_layout.setContentsMargins(s(8), s(8), s(8), s(8))
+        main_layout.setSpacing(0)
+        self._main_layout = main_layout
+
+        self.drag_panel = DragPanel(self.central_widget)
+        self.drag_panel.setVisible(False)
+        self.drag_panel.expand_clicked.connect(self.toggle_widget_mode)
+        main_layout.addWidget(self.drag_panel)
+
+        self.top_bar_widget = QWidget()
+        top_layout = QHBoxLayout(self.top_bar_widget)
+        top_layout.setContentsMargins(0, 0, 0, s(8))
+        
+        for text, slot in [("Запустить все блоки", self.run_all), ("Обновить данные", self._refresh_all_data), ("Режим виджета", self.toggle_widget_mode)]:
+            btn = QPushButton(text)
+            btn.setStyleSheet(Styles.btn_main())
+            btn.clicked.connect(slot)
+            top_layout.addWidget(btn)
+            
+        top_layout.addStretch()
+        main_layout.addWidget(self.top_bar_widget)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setAcceptDrops(False)
+        self.scroll.viewport().setAcceptDrops(False)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        
+        self.blocks_container = BlocksContainer()
+        self.blocks_container.block_added.connect(self.on_block_added)
+        self.blocks_container.block_removed.connect(self.on_block_removed)
+        self.scroll.setWidget(self.blocks_container)
+        main_layout.addWidget(self.scroll, 1)
+
+        self.resize_grip = ResizeGrip(self.central_widget)
+        self.resize_grip.setVisible(False)
+
+    def _update_overlay_positions(self):
+        if self._widget_mode:
+            self.resize_grip.move(self.central_widget.width() - self.resize_grip.width() - s(6), self.central_widget.height() - self.resize_grip.height() - s(6))
+            self.resize_grip.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_overlay_positions()
+
+    def contextMenuEvent(self, event):
+        if not self._widget_mode: return
+        menu = QMenu(self)
+        menu.setStyleSheet(Styles.menu())
+        menu.addAction("Развернуть").triggered.connect(self._exit_widget_mode)
+        menu.addSeparator()
+        on_top = menu.addAction("Поверх всех окон")
+        on_top.setCheckable(True)
+        on_top.setChecked(bool(self.windowFlags() & Qt.WindowStaysOnTopHint))
+        on_top.triggered.connect(self.toggle_stays_on_top)
+        menu.addSeparator()
+        menu.addAction("Выход").triggered.connect(self.quit_app)
+        menu.exec_(event.globalPos())
+
+    def toggle_stays_on_top(self, checked):
+        flags = self.windowFlags() | Qt.WindowStaysOnTopHint if checked else self.windowFlags() & ~Qt.WindowStaysOnTopHint
+        self.setWindowFlags(flags)
+        self.show()
+
+    def _build_tray(self):
+        self.tray = QSystemTrayIcon(self)
+        self.tray.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
+        self.tray.setToolTip("Наблюдение")
+        menu = QMenu()
+        menu.setStyleSheet(Styles.menu())
+        menu.addAction("Показать окно").triggered.connect(self.show_normal)
+        menu.addAction("Режим виджета").triggered.connect(self.toggle_widget_mode)
+        menu.addAction("Открыть журнал блоков").triggered.connect(self.show_journal)
+        menu.addSeparator()
+        menu.addAction("Выход").triggered.connect(self.quit_app)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(self.on_tray_activated)
+        self.tray.show()
+
+    def _restore_window_state(self):
+        if (geo := self.settings.value("window/geometry")) is not None: self.restoreGeometry(geo)
+        if isinstance((pos := self.settings.value("window/widget_pos")), QPoint): self._saved_widget_pos = pos
+
+    def _save_window_state(self):
+        if self._widget_mode and self._normal_geometry_bytes is not None: self.settings.setValue("window/geometry", self._normal_geometry_bytes)
+        elif not self._widget_mode: self.settings.setValue("window/geometry", self.saveGeometry())
+        if self._widget_mode: self.settings.setValue("window/widget_pos", self.pos())
+        self.settings.sync()
+
+    def toggle_widget_mode(self):
+        if self._widget_mode: self._exit_widget_mode()
+        else: self._enter_widget_mode()
+
+    def _enter_widget_mode(self):
+        if self._widget_mode: return
+        self._normal_geometry_bytes, self._normal_flags = self.saveGeometry(), self.windowFlags()
+        self._widget_mode = True
+        if self._saved_widget_pos is None: self._saved_widget_pos = self.pos()
+
+        self.hide()
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(16777215, 16777215)
+        self.top_bar_widget.setVisible(False)
+        self.drag_panel.setVisible(True)
+        self._main_layout.setContentsMargins(s(0), 0, s(0), 0)
+        self.setStyleSheet("QMainWindow { background-color: white; }")
+        self.central_widget.setStyleSheet(Styles.central_widget())
+
+        for w in (self.scroll, self.scroll.viewport(), self.blocks_container): w.setStyleSheet(Styles.transparent_bg())
+        
+        self.blocks_container.set_compact(True)
+        for b in self.blocks_container.blocks: b.set_compact(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        # Фиксированный размер вместо авто-размера
+        self.resize(s(800), s(600))
+
+        self.show()
+        self.move(self._saved_widget_pos)
+        self.resize_grip.setVisible(True)
+        QTimer.singleShot(0, self._update_overlay_positions)
+        self.raise_()
+        self.activateWindow()
+
+    def _exit_widget_mode(self):
+        if not self._widget_mode: return
+        self._widget_mode = False
+        self.hide()
+        self.setWindowFlags(self._normal_flags)
+        self.setStyleSheet("")
+        self.central_widget.setStyleSheet("")
+
+        for b in self.blocks_container.blocks: b.set_compact(False)
+        self.blocks_container.set_compact(False)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.top_bar_widget.setVisible(True)
+        self.drag_panel.setVisible(False)
+        self._main_layout.setContentsMargins(s(8), s(8), s(8), s(8))
+        self.resize_grip.setVisible(False)
+
+        for w in (self.scroll, self.scroll.viewport(), self.blocks_container): w.setStyleSheet("")
+
+        self.setMinimumSize(s(800), s(600))
+        self.show()
+        if self._normal_geometry_bytes is not None: self.restoreGeometry(self._normal_geometry_bytes)
+        self.settings.setValue("window/geometry", self.saveGeometry())
+        self.settings.sync()
+        self.raise_()
+        self.activateWindow()
+
+    def on_block_added(self, block):
+        block.status_changed.connect(self.on_status_changed)
+        if self._widget_mode:
+            block.set_compact(True)
+
+    def on_block_removed(self, block):
+        pass
+
+    def on_status_changed(self, time_str, block_name, status): self.journal.add_entry(time_str, block_name, status)
+    def run_all(self):
+        for block in self.blocks_container.blocks: block.start()
+
+    def show_normal(self):
+        if self._widget_mode: self._exit_widget_mode()
+        else: self.showNormal()
+        self.activateWindow()
+        self.raise_()
+
+    def show_journal(self):
+        self.journal.show()
+        self.journal.activateWindow()
+        self.journal.raise_()
+
+    def on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.Trigger:
+            if self.isVisible() and not self._widget_mode: self.hide()
+            else: self.show_normal()
+
+    def quit_app(self):
+        self._save_window_state()
+        for block in self.blocks_container.blocks:
+            if block.is_running(): block.stop()
+        self.tray.hide()
+        QThreadPool.globalInstance().clear()
+        QThreadPool.globalInstance().waitForDone(1000)
+        QApplication.quit()
+        sys.exit(0)
+
+    def closeEvent(self, event):
+        self._save_window_state()
+        event.ignore()
+        self.hide()
+        if not self._tray_msg_shown:
+            self._tray_msg_shown = True
+            self.tray.showMessage("Наблюдение за файлами", "Программа свёрнута в трей", QSystemTrayIcon.Information, 2000)
+
+if __name__ == "__main__":
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+    app = QApplication(sys.argv)
+    if (screen := app.primaryScreen()):
+        UI_SCALE = max(0.8, (screen.geometry().height() * screen.devicePixelRatio() / 1080.0) / 2.0)
+
+    app.setOrganizationName("FileWatcher")
+    app.setApplicationName("FileDateWatcher")
+    app.setQuitOnLastWindowClosed(False)
+
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec_())
