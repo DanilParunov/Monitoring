@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QPushButton,
     QSpinBox, QDoubleSpinBox, QScrollArea, QFrame, QSystemTrayIcon, QMenu, QDialog,
     QAbstractItemView, QAbstractSpinBox, QStyle, QSizePolicy, QCheckBox, QTimeEdit,
-    QStackedWidget, QLayout, QLineEdit, QGraphicsDropShadowEffect, QComboBox, QGraphicsOpacityEffect
+    QStackedWidget, QLayout, QLineEdit, QGraphicsDropShadowEffect, QComboBox, QGraphicsOpacityEffect, QFileDialog
 )
 from PyQt5.QtCore import (
     Qt, QTimer, QTime, QPoint, QRect, QSize, QUrl, QSettings, pyqtSignal,
@@ -2277,6 +2277,7 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("FileWatcher", "FileDateWatcher")
         self.journal = JournalDialog(self)
         self._tray_msg_shown, self._widget_mode, self._normal_geometry_bytes, self._normal_flags, self._saved_widget_pos = False, False, None, None, None
+        self._current_save_path = None   # путь к активному файлу .mon; None = ещё не сохраняли
 
         self._build_ui()
         self.toast = ToastNotification(self.central_widget)
@@ -2536,34 +2537,42 @@ class MainWindow(QMainWindow):
         if self._widget_mode:
             block._rebuild_compact_grid()
 
-    def save_to_file(self, filepath=None):
-        """Сохраняет конфигурацию в файл."""
-        if not self.blocks_container.blocks:
-            print('[save] Нет блоков для сохранения')
-            self.toast.show_message("Нет блоков для сохранения", "warn", 3000)
-            return
-        
-        if filepath is None:
-            # Используем последний путь или создаём новый
-            last_path = self.settings.value('save/last_file', '')
-            if last_path and Path(last_path).exists():
-                filepath = last_path
-            else:
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                filepath = str(SAVE_DIR / f'config_{timestamp}.mon')
-        
+    def _do_write_file(self, filepath):
+        """Запись данных в файл + обновление QSettings + toast."""
         data = self._get_blocks_data()
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        self.settings.setValue('save/last_file', filepath)
+        self.settings.sync()
+        self._current_save_path = filepath
+        print(f'[save] Сохранено: {filepath}')
+        self.toast.show_message(f"Сохранено: {Path(filepath).name} ({len(data['blocks'])} блоков)", "info")
+
+    def save_to_file(self, force_dialog=False):
+        """Сохраняет конфигурацию.
+        force_dialog=True  — всегда открывает диалог (Ctrl+Shift+S).
+        force_dialog=False — если файл уже выбран, перезаписывает его; иначе открывает диалог."""
+        filepath = self._current_save_path
+        if filepath is None or force_dialog:
+            filepath, _ = QFileDialog.getSaveFileName(
+                self, "Сохранить конфигурацию",
+                str(SAVE_DIR / f"config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mon"),
+                "Monitoring files (*.mon);;All files (*)"
+            )
+            if not filepath:
+                self.toast.show_message("Сохранение отменено", "warn", 2000)
+                return
+            if not filepath.endswith('.mon'):
+                filepath += '.mon'
         try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            self.settings.setValue('save/last_file', filepath)
-            self.settings.sync()
-            print(f'[save] Сохранено: {filepath}')
-            print(f'[save] Размер файла: {Path(filepath).stat().st_size} байт')
-            self.toast.show_message(f"Сохранено: {Path(filepath).name} ({len(data['blocks'])} блоков)", "info")
+            self._do_write_file(filepath)
         except Exception as e:
-            print(f'[save] Ошибка сохранения: {e}')
+            print(f'[save] Ошибка: {e}')
             self.toast.show_message(f"Ошибка сохранения: {e}", "error", 5000)
+
+    def save_as(self):
+        """Сохранить как — всегда с диалогом."""
+        self.save_to_file(force_dialog=True)
 
     def load_from_file(self, filepath):
         """Загружает конфигурацию из файла .mon."""
@@ -2589,6 +2598,7 @@ class MainWindow(QMainWindow):
             print(f'[load] Создано блоков: {created}, пропущено: {skipped}')
             self.settings.setValue('save/last_file', filepath)
             self.settings.sync()
+            self._current_save_path = filepath
             print(f'[load] Загружено: {filepath}')
             self.toast.show_message(f"Загружено: {Path(filepath).name} ({created} блоков)", "info")
         except Exception as e:
@@ -2598,10 +2608,20 @@ class MainWindow(QMainWindow):
     def _load_last_config(self):
         """Загружает последнее сохранение при старте."""
         last_path = self.settings.value('save/last_file', '')
-        print(f'[load] Последний файл: {last_path}')
-        print(f'[load] Файл существует: {Path(last_path).exists() if last_path else False}')
         if last_path and Path(last_path).exists():
             self.load_from_file(last_path)
+        else:
+            print('[load] Файл не найден, загрузка пропущена')            
+
+    def load_from_dialog(self):
+        """Открыть файл .mon через диалог (Ctrl+O)."""
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Открыть конфигурацию",
+            str(SAVE_DIR),
+            "Monitoring files (*.mon);;All files (*)"
+        )
+        if filepath:
+            self.load_from_file(filepath)
         else:
             print('[load] Файл не найден, загрузка пропущена')
 
@@ -2610,7 +2630,11 @@ class MainWindow(QMainWindow):
         for block in self.blocks_container.blocks:
             if block.is_running(): block.stop()
         self.tray.hide()
-        self.save_to_file()
+        if self._current_save_path is not None:
+            try:
+                self._do_write_file(self._current_save_path)
+            except Exception as e:
+                print(f'[quit] Ошибка автосохранения: {e}')
         QThreadPool.globalInstance().clear()
         QThreadPool.globalInstance().waitForDone(1000)
         QApplication.quit()
@@ -2618,8 +2642,15 @@ class MainWindow(QMainWindow):
 
     def keyPressEvent(self, event):
         """Обработчик горячих клавиш."""
-        if event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_S:
-            self.save_to_file()
+        mods = event.modifiers()
+        if mods & Qt.ControlModifier and mods & Qt.ShiftModifier and event.key() == Qt.Key_S:
+            self.save_as()                      # Ctrl+Shift+S — сохранить как
+            event.accept()
+        elif mods & Qt.ControlModifier and event.key() == Qt.Key_S:
+            self.save_to_file()                 # Ctrl+S — сохранить / перезаписать
+            event.accept()
+        elif mods & Qt.ControlModifier and event.key() == Qt.Key_O:
+            self.load_from_dialog()             # Ctrl+O — открыть
             event.accept()
         else:
             super().keyPressEvent(event)
