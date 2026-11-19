@@ -2278,6 +2278,7 @@ class MainWindow(QMainWindow):
         self.journal = JournalDialog(self)
         self._tray_msg_shown, self._widget_mode, self._normal_geometry_bytes, self._normal_flags, self._saved_widget_pos = False, False, None, None, None
         self._current_save_path = None   # путь к активному файлу .mon; None = ещё не сохраняли
+        self.setAcceptDrops(True)
 
         self._build_ui()
         self.toast = ToastNotification(self.central_widget)
@@ -2654,6 +2655,7 @@ class MainWindow(QMainWindow):
             event.accept()
         else:
             super().keyPressEvent(event)
+
 
     def closeEvent(self, event):
         self._save_window_state()
