@@ -1,5 +1,7 @@
 import sys
 import os
+import json
+from pathlib import Path
 from datetime import datetime, timedelta
 
 from PyQt5.QtWidgets import (
@@ -7,17 +9,20 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QPushButton,
     QSpinBox, QDoubleSpinBox, QScrollArea, QFrame, QSystemTrayIcon, QMenu, QDialog,
     QAbstractItemView, QAbstractSpinBox, QStyle, QSizePolicy, QCheckBox, QTimeEdit,
-    QStackedWidget, QLayout, QLineEdit, QGraphicsDropShadowEffect, QComboBox
+    QStackedWidget, QLayout, QLineEdit, QGraphicsDropShadowEffect, QComboBox, QGraphicsOpacityEffect
 )
 from PyQt5.QtCore import (
     Qt, QTimer, QTime, QPoint, QRect, QSize, QUrl, QSettings, pyqtSignal,
-    QThreadPool, QRunnable, QObject, QEvent, QMimeData 
+    QThreadPool, QRunnable, QObject, QEvent, QMimeData, QPropertyAnimation, QEasingCurve
 )
 from PyQt5.QtGui import (
     QColor, QDesktopServices, QPainter, QPen, QFontMetrics, QFont, QDrag )
 
 MAX_CACHE_SIZE = 10000
 TIMER_INTERNAL = 3600*1000 # 1 час
+SAVE_DIR = Path(os.environ.get('LOCALAPPDATA', Path.home() / '.local' / 'share')) / 'monitoring'
+SAVE_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # ---------------------------------------------------------------------------
 # МАСШТАБ ИНТЕРФЕЙСА — все параметры масштаба только в этом блоке
@@ -34,7 +39,7 @@ REF_SCREEN_WIDTH  = 1920.0      # используется только в ре�
 SCALE_MODE   = "height"         # "height" | "fit" | "manual"
 SCALE_MANUAL = 1.0              # значение для SCALE_MODE = "manual"
 SCALE_MIN    = 0.6              # нижний ограничитель
-SCALE_MAX    = 3.0              # верхний ограничитель
+SCALE_MAX    = 1.5              # верхний ограничитель
 SCALE_ROUND  = int              # int — усечение как в исходнике; round — округление
 
 UI_SCALE = 1.0                  # рабочее значение, ставится init_ui_scale()
@@ -2166,6 +2171,99 @@ class JournalDialog(QDialog):
         self.table.setItem(row, 2, item)
         self.table.scrollToBottom()
 
+#---------------------------------------------------------------------------
+#ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ВНУТРИ ОКНА
+#---------------------------------------------------------------------------
+class ToastNotification(QFrame):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setObjectName("toast")
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setStyleSheet(f"""
+            QFrame#toast {{
+                background-color: {P.surface};
+                border: 1px solid {P.border};
+                border-radius: {s(R_BTN)}px;
+            }}
+        """)
+        self._shadow = QGraphicsDropShadowEffect(self)
+        self._shadow.setBlurRadius(s(20))
+        self._shadow.setColor(QColor(15, 23, 42, 60))
+        self._shadow.setOffset(0, s(4))
+        self.setGraphicsEffect(self._shadow)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(s(12), s(8), s(14), s(8))
+        lay.setSpacing(s(8))
+        self.icon_label = QLabel()
+        self.icon_label.setStyleSheet("background: transparent; border: none;")
+        self.text_label = QLabel()
+        self.text_label.setStyleSheet(f"""
+            QLabel {{
+                color: {P.ink}; font-size: {s(FONT_INPUT)}px;
+                background: transparent; border: none;
+            }}
+        """)
+        lay.addWidget(self.icon_label, 0, Qt.AlignVCenter)
+        lay.addWidget(self.text_label, 0, Qt.AlignVCenter)
+
+        self._effect = QGraphicsOpacityEffect(self)
+        self._effect.setOpacity(0.0)
+        self.setGraphicsEffect(self._effect)
+
+        self._anim = None
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self._fade_out)
+        self.hide()
+
+    def show_message(self, text, kind="info", duration=2500):
+        icons = {"info": "✓", "error": "✕", "warn": "⚠"}
+        colors = {"info": P.ok_deep, "error": P.bad_deep, "warn": P.warn_deep}
+        self.icon_label.setText(icons.get(kind, "✓"))
+        self.icon_label.setStyleSheet(
+            f"color: {colors.get(kind, P.ok_deep)}; font-weight: bold;"
+            f"font-size: {s(18)}px; background: transparent; border: none;"
+        )
+        self.text_label.setText(text)
+        self.adjustSize()
+        self.reposition()
+        self.show()
+        self.raise_()
+        self._fade_in()
+        self._hide_timer.start(duration)
+
+    def reposition(self):
+        p = self.parentWidget()
+        if p is None:
+            return
+        x = (p.width() - self.width()) // 2
+        y = p.height() - self.height() - s(16)
+        self.move(max(s(8), x), max(s(8), y))
+
+    def _fade_in(self):
+        if self._anim is not None:
+            self._anim.stop()
+        self._effect.setOpacity(0.0)
+        self._anim = QPropertyAnimation(self._effect, b"opacity")
+        self._anim.setDuration(200)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim.start()
+
+    def _fade_out(self):
+        if self._anim is not None:
+            self._anim.stop()
+        self._anim = QPropertyAnimation(self._effect, b"opacity")
+        self._anim.setDuration(300)
+        self._anim.setStartValue(self._effect.opacity())
+        self._anim.setEndValue(0.0)
+        self._anim.setEasingCurve(QEasingCurve.InCubic)
+        self._anim.finished.connect(self.hide)
+        self._anim.start()
+
+
 # ---------------------------------------------------------------------------
 # ГЛАВНОЕ ОКНО
 # ---------------------------------------------------------------------------
@@ -2181,6 +2279,7 @@ class MainWindow(QMainWindow):
         self._tray_msg_shown, self._widget_mode, self._normal_geometry_bytes, self._normal_flags, self._saved_widget_pos = False, False, None, None, None
 
         self._build_ui()
+        self.toast = ToastNotification(self.central_widget)
         self._build_tray()
         self._restore_window_state()
 
@@ -2189,6 +2288,7 @@ class MainWindow(QMainWindow):
         self.daily_timer.timeout.connect(self._check_daily_update)
         self.daily_timer.start()
         self._last_update_day = datetime.now().day
+        self._load_last_config()
 
     def _check_daily_update(self):
         now = datetime.now()
@@ -2254,6 +2354,8 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_overlay_positions()
+        if hasattr(self, "toast"):
+            self.toast.reposition()
 
     def contextMenuEvent(self, event):
         if not self._widget_mode: return
@@ -2393,15 +2495,134 @@ class MainWindow(QMainWindow):
             if self.isVisible() and not self._widget_mode: self.hide()
             else: self.show_normal()
 
+    def _get_blocks_data(self):
+        """Собирает данные всех блоков для сохранения."""
+        print(f'[save] Количество блоков: {len(self.blocks_container.blocks)}')
+        blocks = []
+        for i, block in enumerate(self.blocks_container.blocks):
+            print(f'[save] Блок {i}: {block.folder_path}')
+            blocks.append({
+                'folder_path': block.folder_path,
+                'custom_name': block.custom_name,
+                'period': block.period_spin.value(),
+                'multiplier': block.multiplier_spin.value(),
+                'use_period_alert': block.use_period_alert_cb.isChecked(),
+                'start_timeout': block.start_timeout_spin.value(),
+                'use_exact_start': block.use_exact_start_cb.isChecked(),
+                'start_time': block.start_time_edit.time().toString('HH:mm'),
+                'indicator_mode': block.indicator_mode_combo.currentText(),
+                'selected_columns': block.selected_columns,
+                'widget_columns': block.widget_columns
+            })
+        data = {'blocks': blocks}
+        print(f'[save] Данные для сохранения: {data}')
+        return data
+
+    def _apply_block_settings(self, block, data):
+        """Применяет настройки к блоку после загрузки."""
+        block.custom_name = data.get('custom_name', block.custom_name)
+        block.name_edit.setText(block.custom_name)
+        block.period_spin.setValue(data.get('period', 5))
+        block.multiplier_spin.setValue(data.get('multiplier', 1.5))
+        block.use_period_alert_cb.setChecked(data.get('use_period_alert', False))
+        block.start_timeout_spin.setValue(data.get('start_timeout', 30))
+        block.use_exact_start_cb.setChecked(data.get('use_exact_start', False))
+        block.start_time_edit.setTime(QTime.fromString(data.get('start_time', '00:00'), 'HH:mm'))
+        block.indicator_mode_combo.setCurrentText(data.get('indicator_mode', 'Статика'))
+        block.selected_columns = data.get('selected_columns', [])
+        block.widget_columns = data.get('widget_columns', list(WIDGET_MAIN_COLUMNS))
+        block._on_multiplier_toggled(block.use_period_alert_cb.isChecked())
+        block._update_alert_info()
+        if self._widget_mode:
+            block._rebuild_compact_grid()
+
+    def save_to_file(self, filepath=None):
+        """Сохраняет конфигурацию в файл."""
+        if not self.blocks_container.blocks:
+            print('[save] Нет блоков для сохранения')
+            self.toast.show_message("Нет блоков для сохранения", "warn", 3000)
+            return
+        
+        if filepath is None:
+            # Используем последний путь или создаём новый
+            last_path = self.settings.value('save/last_file', '')
+            if last_path and Path(last_path).exists():
+                filepath = last_path
+            else:
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filepath = str(SAVE_DIR / f'config_{timestamp}.mon')
+        
+        data = self._get_blocks_data()
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            self.settings.setValue('save/last_file', filepath)
+            self.settings.sync()
+            print(f'[save] Сохранено: {filepath}')
+            print(f'[save] Размер файла: {Path(filepath).stat().st_size} байт')
+            self.toast.show_message(f"Сохранено: {Path(filepath).name} ({len(data['blocks'])} блоков)", "info")
+        except Exception as e:
+            print(f'[save] Ошибка сохранения: {e}')
+            self.toast.show_message(f"Ошибка сохранения: {e}", "error", 5000)
+
+    def load_from_file(self, filepath):
+        """Загружает конфигурацию из файла .mon."""
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            print(f'[load] Загруженные данные: {data}')
+            blocks_count = len(data.get('blocks', []))
+            print(f'[load] Количество блоков в файле: {blocks_count}')
+            for block in list(self.blocks_container.blocks):
+                self.blocks_container.remove_block(block)
+            created = 0
+            skipped = 0
+            for block_data in data.get('blocks', []):
+                folder_path = block_data.get('folder_path', '')
+                if folder_path and os.path.isdir(folder_path):
+                    block = self.blocks_container.add_block(folder_path)
+                    self._apply_block_settings(block, block_data)
+                    created += 1
+                else:
+                    print(f'[load] Пропущен блок: {folder_path} (папка не существует)')
+                    skipped += 1
+            print(f'[load] Создано блоков: {created}, пропущено: {skipped}')
+            self.settings.setValue('save/last_file', filepath)
+            self.settings.sync()
+            print(f'[load] Загружено: {filepath}')
+            self.toast.show_message(f"Загружено: {Path(filepath).name} ({created} блоков)", "info")
+        except Exception as e:
+            print(f'[load] Ошибка: {e}')
+            self.toast.show_message(f"Ошибка загрузки: {e}", "error", 5000)
+
+    def _load_last_config(self):
+        """Загружает последнее сохранение при старте."""
+        last_path = self.settings.value('save/last_file', '')
+        print(f'[load] Последний файл: {last_path}')
+        print(f'[load] Файл существует: {Path(last_path).exists() if last_path else False}')
+        if last_path and Path(last_path).exists():
+            self.load_from_file(last_path)
+        else:
+            print('[load] Файл не найден, загрузка пропущена')
+
     def quit_app(self):
         self._save_window_state()
         for block in self.blocks_container.blocks:
             if block.is_running(): block.stop()
         self.tray.hide()
+        self.save_to_file()
         QThreadPool.globalInstance().clear()
         QThreadPool.globalInstance().waitForDone(1000)
         QApplication.quit()
         sys.exit(0)
+
+    def keyPressEvent(self, event):
+        """Обработчик горячих клавиш."""
+        if event.modifiers() & Qt.ControlModifier and event.key() == Qt.Key_S:
+            self.save_to_file()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
 
     def closeEvent(self, event):
         self._save_window_state()
