@@ -16,6 +16,8 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import (
     QColor, QDesktopServices, QPainter, QPen, QFontMetrics, QFont, QDrag )
 
+MAX_CACHE_SIZE = 10000
+TIMER_INTERNAL = 3600*1000 # 1 час
 
 # ---------------------------------------------------------------------------
 # МАСШТАБ ИНТЕРФЕЙСА — все параметры масштаба только в этом блоке
@@ -36,6 +38,7 @@ SCALE_MAX    = 3.0              # верхний ограничитель
 SCALE_ROUND  = int              # int — усечение как в исходнике; round — округление
 
 UI_SCALE = 1.0                  # рабочее значение, ставится init_ui_scale()
+
 
 
 def s(val):
@@ -746,49 +749,92 @@ def set_custom_tooltip(widget, text):
 # ФОНОВЫЕ ПОТОКИ
 # ---------------------------------------------------------------------------
 class WorkerSignals(QObject):
-    finished = pyqtSignal(list, bool, datetime, object)
+    finished = pyqtSignal(list, bool, datetime, object, dict)  # добавлен dict для кэша
     error = pyqtSignal(str, datetime)
     data_parsed = pyqtSignal(dict, str, object)
 
 class ScanWorker(QRunnable):
-    def __init__(self, folder_path, last_check_time, initial):
+    def __init__(self, folder_path, last_check_time, initial, file_cache=None):
         super().__init__()
-        self.folder_path, self.last_check_time, self.initial = folder_path, last_check_time, initial
+        self.folder_path = folder_path
+        self.last_check_time = last_check_time
+        self.initial = initial
+        self.file_cache = file_cache or {}  # {filename: mtime}
         self.signals = WorkerSignals()
 
     def run(self):
         start_time = datetime.now()
         found, max_file_time = [], None
+        current_cache = {}
+        
         try:
             with os.scandir(self.folder_path) as it:
                 for entry in it:
                     try:
-                        if entry.is_file():
-                            st = entry.stat()
-                            ctime = datetime.fromtimestamp(st.st_ctime if st.st_ctime > 946684800 else st.st_mtime)
-                            if max_file_time is None or ctime > max_file_time: max_file_time = ctime
-                            if self.initial or ctime > self.last_check_time: found.append((entry.name, ctime))
-                    except OSError: continue
+                        # Фильтр только .txt файлов на раннем этапе
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        if not entry.name.endswith('.txt'):
+                            continue
+                        
+                        # Используем stat без follow_symlinks для скорости
+                        st = entry.stat(follow_symlinks=False)
+                        mtime = st.st_mtime
+                        # Сохраняем в текущий кэш
+                        current_cache[entry.name] = mtime
+                        # Находим максимальное время (как datetime, чтобы не ломать strftime)
+                        file_dt = datetime.fromtimestamp(mtime)
+                        if max_file_time is None or file_dt > max_file_time:
+                            max_file_time = file_dt
+                        
+                        # Инкрементальная проверка: только новые или измененные файлы
+                        if self.initial:
+                            # При первом запуске — все файлы
+                            found.append((entry.name, datetime.fromtimestamp(mtime)))
+                        else:
+                            # Проверяем только если файл новый или изменился
+                            old_mtime = self.file_cache.get(entry.name)
+                            if old_mtime is None or mtime > old_mtime:
+                                # Файл новый или обновился после последней проверки
+                                if mtime > self.last_check_time.timestamp():
+                                    found.append((entry.name, datetime.fromtimestamp(mtime)))
+                    except OSError:
+                        continue
         except Exception as e:
             self.signals.error.emit(str(e), start_time)
             return
-        self.signals.finished.emit(found, self.initial, start_time, max_file_time)
-
+        
+        # Возвращаем найденные файлы и обновленный кэш
+        self.signals.finished.emit(found, self.initial, start_time, max_file_time, current_cache)
+        
+        
 class FileParseWorker(QRunnable):
     TAIL_BYTES = 65536
-    def __init__(self, folder_path, selected_columns):
+    def __init__(self, folder_path, selected_columns, file_cache=None):
         super().__init__()
-        self.folder_path, self.selected_columns = folder_path, selected_columns
+        self.folder_path = folder_path
+        self.selected_columns = selected_columns
+        self.file_cache = file_cache or {}
         self.signals = WorkerSignals()
 
     def run(self):
         try:
             latest_path, latest_mtime = None, -1.0
-            with os.scandir(self.folder_path) as it:
-                for entry in it:
-                    if entry.is_file() and entry.name.endswith('.txt'):
-                        m = entry.stat().st_mtime
-                        if m > latest_mtime: latest_mtime, latest_path = m, entry.path
+            
+            # Используем кэш если доступен
+            if self.file_cache:
+                for name, mtime in self.file_cache.items():
+                    if name.endswith('.txt') and mtime > latest_mtime:
+                        latest_mtime = mtime
+                        latest_path = os.path.join(self.folder_path, name)
+            else:
+                # Fallback: полное сканирование
+                with os.scandir(self.folder_path) as it:
+                    for entry in it:
+                        if entry.is_file(follow_symlinks=False) and entry.name.endswith('.txt'):
+                            m = entry.stat(follow_symlinks=False).st_mtime
+                            if m > latest_mtime:
+                                latest_mtime, latest_path = m, entry.path
 
             if not latest_path:
                 self.signals.data_parsed.emit({}, "Файл не найден", None)
@@ -1025,6 +1071,7 @@ class BlockWidget(QFrame):
         self._running, self._start_time_qtime, self._compact, self._is_scanning = False, None, False, False
         self.selected_columns, self.parsed_data, self.parse_error = [], {}, ""
         self.is_parsing, self._detail_expanded, self._last_parsed_mtime = False, False, None
+        self._file_cache = {}  # {filename: mtime} для инкрементального сканирования
         
         self.widget_columns = list(WIDGET_MAIN_COLUMNS)
         self._compact_collapsed = False
@@ -1040,7 +1087,7 @@ class BlockWidget(QFrame):
         self.blink_timer.timeout.connect(self._toggle_blink)
         
         self.ui_timer = QTimer(self)
-        self.ui_timer.setInterval(3600 * 1000) # 1 час
+        self.ui_timer.setInterval(TIMER_INTERNAL) # 1 час
         self.ui_timer.timeout.connect(self._update_check_times)
         self.ui_timer.start()
 
@@ -1048,7 +1095,7 @@ class BlockWidget(QFrame):
         self._drag_start_pos=None
 
         self._build_ui()
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         if CARD_SHADOW:
             self._card_shadow = QGraphicsDropShadowEffect(self)
             self._card_shadow.setBlurRadius(s(18))
@@ -1111,6 +1158,14 @@ class BlockWidget(QFrame):
         outer.setContentsMargins(s(14), s(12), s(14), s(12))
         outer.setSpacing(s(10))
 
+        # --- Шапка блока (фиксированная, не зависит от раскрытия данных) ---
+        header_container = QWidget()
+        header_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        header_container.setStyleSheet("background: transparent; border: none;")
+        header_layout = QVBoxLayout(header_container)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(s(6))
+    
         head = QHBoxLayout()
         head.setSpacing(s(8))
         self.circle = QLabel()
@@ -1126,35 +1181,46 @@ class BlockWidget(QFrame):
         self.name_edit.textChanged.connect(self._on_name_changed)
         head.addWidget(self.name_edit, 1)
         self.delete_btn = QPushButton("✕")
-        self.delete_btn.setFixedSize(s(26), s(26))
+        self.delete_btn.setFixedSize(s(32), s(32))
         self.delete_btn.setCursor(Qt.PointingHandCursor)
-        self.delete_btn.setStyleSheet(Styles.delete_btn())
+        set_custom_tooltip(self.delete_btn, "Удалить блок")
+        self.delete_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: 1px solid transparent;
+                border-radius: {s(8)}px; color: #999; font-size: {s(18)}px; font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background: #fdeaea; border-color: #f6c9c9; color: #b91c1c;
+            }}
+            QPushButton:pressed {{ background: #fbdcdc; }}
+        """)
         self.delete_btn.clicked.connect(lambda: self.delete_requested.emit(self))
         head.addWidget(self.delete_btn, 0, Qt.AlignVCenter)
-        outer.addLayout(head)
-
+        header_layout.addLayout(head)
+    
         path_row = QHBoxLayout()
-        path_row.setSpacing(s(8))
+        path_row.setSpacing(s(6))
+        self.open_btn = QPushButton()
+        self.open_btn.setIcon(self.style().standardIcon(QStyle.SP_DirOpenIcon))
+        self.open_btn.setIconSize(QSize(s(16), s(16)))
+        self.open_btn.setFixedSize(s(32), s(32))
+        self.open_btn.setCursor(Qt.PointingHandCursor)
+        set_custom_tooltip(self.open_btn, "Открыть папку")
+        self.open_btn.clicked.connect(self._open_folder)
+        path_row.addWidget(self.open_btn, 0, Qt.AlignTop)
         self.path_label = QLabel(self.folder_path)
         self.path_label.setStyleSheet(Styles.path_label())
         self.path_label.setWordWrap(True)
         self.path_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         path_row.addWidget(self.path_label, 1)
-        self.open_btn = QPushButton()
-        self.open_btn.setIcon(self.style().standardIcon(QStyle.SP_DirOpenIcon))
-        self.open_btn.setIconSize(QSize(s(15), s(15)))
-        self.open_btn.setFixedSize(s(30), s(30))
-        self.open_btn.setCursor(Qt.PointingHandCursor)
-        self.open_btn.setStyleSheet(Styles.icon_btn())
-        set_custom_tooltip(self.open_btn, "Открыть папку")
-        self.open_btn.clicked.connect(self._open_folder)
-        path_row.addWidget(self.open_btn, 0, Qt.AlignTop)
-        outer.addLayout(path_row)
-
+        header_layout.addLayout(path_row)
+    
         line = QFrame()
         line.setFixedHeight(max(1, s(1)))
         line.setStyleSheet(Styles.separator())
-        outer.addWidget(line)
+        header_layout.addWidget(line)
+    
+        outer.addWidget(header_container)
 
         card = QFrame()
         card.setObjectName("settingsCard")
@@ -1348,7 +1414,7 @@ class BlockWidget(QFrame):
         self.detail_scroll.setFixedHeight(fm.lineSpacing() * 20 + s(16))
         dd_layout.addWidget(self.detail_scroll)
         outer.addWidget(self.detail_data_widget)
-        outer.addStretch(1)
+
 
     def _build_compact_ui(self, parent):
         self.compact_layout = QVBoxLayout(parent)
@@ -1488,7 +1554,14 @@ class BlockWidget(QFrame):
         self._detail_expanded = not self._detail_expanded
         self.detail_data_widget.setVisible(self._detail_expanded)
         self.detail_toggle_btn.setText("▲ Скрыть данные" if self._detail_expanded else "▼ Показать данные")
+        self.detail_data_widget.layout().invalidate()
         self.updateGeometry()
+        p = self.parentWidget()
+        while p is not None:
+            if p.layout() is not None:
+                p.layout().invalidate()
+            p.updateGeometry()
+            p = p.parentWidget()
         if self._detail_expanded and not self.parsed_data and not self.is_parsing:
             self.fetch_file_data()
 
@@ -1496,10 +1569,11 @@ class BlockWidget(QFrame):
         return list(set(self.selected_columns) | {col[0] for col in self.widget_columns})
 
     def _get_latest_txt_mtime(self):
-        try:
-            with os.scandir(self.folder_path) as it:
-                return max((e.stat().st_mtime for e in it if e.is_file() and e.name.endswith('.txt')), default=None)
-        except OSError: return None
+        if not self._file_cache:
+            return None
+        # Фильтруем только .txt файлы из кэша
+        txt_files = {name: mtime for name, mtime in self._file_cache.items() if name.endswith('.txt')}
+        return max(txt_files.values()) if txt_files else None
 
     def fetch_file_data(self, force=False):
         if self.is_parsing: return
@@ -1507,7 +1581,7 @@ class BlockWidget(QFrame):
         
         self.is_parsing = True
         self._update_data_label()
-        worker = FileParseWorker(self.folder_path, self._get_fetch_columns())
+        worker = FileParseWorker(self.folder_path, self._get_fetch_columns(), self._file_cache)
         worker.signals.data_parsed.connect(self._on_file_data_parsed)
         QThreadPool.globalInstance().start(worker)
 
@@ -1581,7 +1655,7 @@ class BlockWidget(QFrame):
         else:
             self.setMinimumSize(0, 0)
             self.setMaximumSize(16777215, 16777215)
-            self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+            self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             self.setStyleSheet(Styles.block_detail())
         self.unsetCursor()
 
@@ -1683,6 +1757,7 @@ class BlockWidget(QFrame):
         self._running = False
         self.next_check_time = None
         self.timer.stop()
+        self._file_cache.clear()
         self._update_check_times()
         
         for w in (self.start_btn, self.period_spin, self.use_period_alert_cb, self.start_timeout_spin, self.use_exact_start_cb): w.setEnabled(True)
@@ -1719,7 +1794,7 @@ class BlockWidget(QFrame):
     def check_files(self, initial=False):
         if self._is_scanning: return
         self._is_scanning = True
-        worker = ScanWorker(self.folder_path, self.last_check_time, initial)
+        worker = ScanWorker(self.folder_path, self.last_check_time, initial, self._file_cache)
         worker.signals.finished.connect(self._on_scan_finished)
         worker.signals.error.connect(self._on_scan_error)
         QThreadPool.globalInstance().start(worker)
@@ -1728,24 +1803,31 @@ class BlockWidget(QFrame):
         self._is_scanning = False
         self.status_changed.emit(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), self.custom_name, f"Ошибка: {err_msg}")
         self._set_circle("red")
+        
 
-    def _on_scan_finished(self, found, initial, scan_time, max_file_time):
+
+    def _on_scan_finished(self, found, initial, scan_time, max_file_time, current_cache):
         self._is_scanning = False
         self.last_check_time = scan_time
         
+        # Ограничиваем размер кэша
+        if len(current_cache) > MAX_CACHE_SIZE:
+            # Оставляем только самые свежие файлы
+            sorted_files = sorted(current_cache.items(), key=lambda x: x[1], reverse=True)
+            self._file_cache = dict(sorted_files[:MAX_CACHE_SIZE])
+        else:
+            self._file_cache = current_cache
+        self._file_cache = current_cache  # Обновляем кэш
         if max_file_time: self.last_file_time = max_file_time
         self._update_last_file_label()
-        
         if not self._running: 
             self._update_check_times()
             return
-
         if found:
             self.status_changed.emit(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), self.custom_name, ("Файлы найдены (%d)" if initial else "Файлы пришли (%d)") % len(found))
             if not initial: self.fetch_file_data()
         else:
             self.status_changed.emit(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), self.custom_name, "Файлов нет")
-
         self._update_indicator(datetime.now(), initial=initial)
         self._update_check_times()
 
@@ -2138,7 +2220,7 @@ class MainWindow(QMainWindow):
         top_layout = QHBoxLayout(self.top_bar_widget)
         top_layout.setContentsMargins(0, 0, 0, s(8))
         
-        for text, slot in [("Запустить все блоки", self.run_all), ("Обновить данные", self._refresh_all_data), ("Режим виджета", self.toggle_widget_mode)]:
+        for text, slot in [("Запустить все блоки", self.run_all), ("Остановить все блоки", self.stop_all), ("Обновить данные", self._refresh_all_data), ("Режим виджета", self.toggle_widget_mode)]:
             btn = QPushButton(text)
             btn.setStyleSheet(Styles.btn_main())
             btn.clicked.connect(slot)
@@ -2288,8 +2370,12 @@ class MainWindow(QMainWindow):
         pass
 
     def on_status_changed(self, time_str, block_name, status): self.journal.add_entry(time_str, block_name, status)
+    
     def run_all(self):
         for block in self.blocks_container.blocks: block.start()
+
+    def stop_all(self):
+        for block in self.blocks_container.blocks: block.stop()
 
     def show_normal(self):
         if self._widget_mode: self._exit_widget_mode()
