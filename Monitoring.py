@@ -779,8 +779,6 @@ class ScanWorker(QRunnable):
                         # Фильтр только .txt файлов на раннем этапе
                         if not entry.is_file(follow_symlinks=False):
                             continue
-                        if not entry.name.endswith('.txt'):
-                            continue
                         
                         # Используем stat без follow_symlinks для скорости
                         st = entry.stat(follow_symlinks=False)
