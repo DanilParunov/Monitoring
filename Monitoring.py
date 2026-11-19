@@ -2067,31 +2067,33 @@ class BlocksContainer(QWidget):
 
     def dropEvent(self, event):
         self.drop_overlay.clear()
-
         if event.mimeData().hasFormat("application/x-blockwidget"):
             source_block = self.dragged_block
             if not source_block:
                 return
-
             drop_idx = self._get_drop_index(event.pos())
             old_idx = self.blocks.index(source_block)
-
             if drop_idx > old_idx:
                 drop_idx -= 1
-
             if drop_idx != old_idx:
                 self.blocks.pop(old_idx)
                 self.blocks.insert(drop_idx, source_block)
                 self._refresh_layout()
-
             event.acceptProposedAction()
             return
-
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
+            main_window = self.window()
             for url in event.mimeData().urls():
                 path = url.toLocalFile()
-                if os.path.isdir(path) and not any(b.folder_path == path for b in self.blocks):
+                if not path:
+                    continue
+                if path.lower().endswith('.mon'):
+                    # Файл конфигурации — загружаем через главное окно
+                    if main_window and hasattr(main_window, '_merge_from_file'):
+                        main_window._merge_from_file(path)
+                elif os.path.isdir(path) and not any(b.folder_path == path for b in self.blocks):
+                    # Папка — создаём блок
                     self.add_block(path)
 
     def _refresh_layout(self):
@@ -2604,6 +2606,40 @@ class MainWindow(QMainWindow):
             self.toast.show_message(f"Загружено: {Path(filepath).name} ({created} блоков)", "info")
         except Exception as e:
             print(f'[load] Ошибка: {e}')
+            self.toast.show_message(f"Ошибка загрузки: {e}", "error", 5000)
+
+    def _merge_from_file(self, filepath):
+        """Добавляет блоки из файла, пропуская уже существующие."""
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Собираем существующие пути для проверки дубликатов
+            existing_paths = {block.folder_path for block in self.blocks_container.blocks}
+            
+            added = 0
+            skipped = 0
+            for block_data in data.get('blocks', []):
+                folder_path = block_data.get('folder_path', '')
+                if not folder_path or not os.path.isdir(folder_path):
+                    print(f'[merge] Пропущен блок: {folder_path} (папка не существует)')
+                    skipped += 1
+                    continue
+                if folder_path in existing_paths:
+                    print(f'[merge] Пропущен дубликат: {folder_path}')
+                    skipped += 1
+                    continue
+                
+                # Создаём новый блок
+                block = self.blocks_container.add_block(folder_path)
+                self._apply_block_settings(block, block_data)
+                existing_paths.add(folder_path)
+                added += 1
+            
+            print(f'[merge] Загружено: {filepath} (добавлено: {added}, пропущено: {skipped})')
+            self.toast.show_message(f"Добавлено блоков: {added} (пропущено: {skipped})", "info")
+        except Exception as e:
+            print(f'[merge] Ошибка: {e}')
             self.toast.show_message(f"Ошибка загрузки: {e}", "error", 5000)
 
     def _load_last_config(self):
